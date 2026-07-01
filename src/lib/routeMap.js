@@ -8,7 +8,7 @@
 // Legacy tool ids 5-7 & 5-15 are redirect-only aliases of the experiment tool
 // (primary id 5-4). They share 5-4's slug and are NOT emitted in the sitemap.
 
-export const SITE_URL = "https://mktlibrary.up.railway.app";
+export const SITE_URL = "https://growthopsplaybook-production.up.railway.app";
 
 // component tag is documentation-only (the actual dispatch lives in the page).
 export const ROUTES = [

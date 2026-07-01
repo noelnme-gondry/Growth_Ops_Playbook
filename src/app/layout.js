@@ -15,18 +15,18 @@ export const metadata = {
     follow: true,
   },
   alternates: {
-    canonical: "https://mktlibrary.up.railway.app/",
+    canonical: "https://growthopsplaybook-production.up.railway.app/",
   },
   openGraph: {
     type: "website",
-    url: "https://mktlibrary.up.railway.app/",
+    url: "https://growthopsplaybook-production.up.railway.app/",
     title: "Growth Ops Playbook | 마케팅 엔지니어링 데스크",
     description: "실무에 바로 적용하는 퍼포먼스 마케팅 SOP & 데이터 분석 툴",
     siteName: "Growth Ops Playbook",
     locale: "ko_KR",
     images: [
       {
-        url: "https://mktlibrary.up.railway.app/og-card.png",
+        url: "https://growthopsplaybook-production.up.railway.app/og-card.png",
         width: 1200,
         height: 630,
       },
@@ -36,7 +36,7 @@ export const metadata = {
     card: "summary_large_image",
     title: "Growth Ops Playbook",
     description: "실무에 바로 적용하는 퍼포먼스 마케팅 SOP & 데이터 분석 툴",
-    images: ["https://mktlibrary.up.railway.app/og-card.png"],
+    images: ["https://growthopsplaybook-production.up.railway.app/og-card.png"],
   },
   other: {
     "google-adsense-account": "ca-pub-3073450406371629",
