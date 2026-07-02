@@ -177,8 +177,9 @@ function fmtInt(v) {
 // 세팅 후 regLabRun 호출. 모든 태그 both → 단일 결합 모델. utils(수학 엔진) 불변, 집계만 여기서.
 const _labTagOf = (h) => {
   const n = String(h).toLowerCase();
-  if (n.includes("android") || n.includes("aos")) return "android";
-  if (/\bios\b/.test(n) || n.includes("iphone") || n.includes("ipad")) return "ios";
+  // `_`도 구분자로 취급(정규식 \b는 _를 단어문자로 봐서 google_roi_ios_spend의 ios를 못 잡음).
+  if (/(?:^|[^a-z])(android|aos)(?:[^a-z]|$)/.test(n)) return "android";
+  if (/(?:^|[^a-z])(ios|iphone|ipad)(?:[^a-z]|$)/.test(n)) return "ios";
   return "both";
 };
 function buildAggregatedLab(rows, headers, colMap, target, platform) {
@@ -194,9 +195,15 @@ function buildAggregatedLab(rows, headers, colMap, target, platform) {
   const evCols = headers.filter((h) => (colMap[h] || {}).role === "dummy");
   const stCols = headers.filter((h) => (colMap[h] || {}).role === "step");
   const tCol = headers.find((h) => ["week", "date"].includes((colMap[h] || {}).role));
-  const numOf = (v) => parseFloat(String(v).replace(/[^0-9.\-]/g, "")) || 0;
+  const numOf = (v) => { const n = parseFloat(String(v ?? "").replace(/[^0-9.\-]/g, "")); return isFinite(n) ? n : 0; };
   const DEP = "__Y_agg__";
-  const augRows = rows.map((r) => ({ ...r, [DEP]: yCols.reduce((s, c) => s + numOf(r[c]), 0) }));
+  // Y=index별 벡터합(빈칸/NaN→0), X(채널·이벤트·스텝)도 0 채움 → 엔진의 listwise 행삭제로 표본이 사라지는 것 방지.
+  const xCols = [...chCols, ...evCols, ...stCols];
+  const augRows = rows.map((r) => {
+    const o = { ...r, [DEP]: yCols.reduce((s, c) => s + numOf(r[c]), 0) };
+    xCols.forEach((c) => { o[c] = numOf(r[c]); });
+    return o;
+  });
   REG_LAB_STATE.rows = augRows;
   REG_LAB_STATE.headers = [DEP, ...chCols, ...evCols, ...stCols, ...(tCol ? [tCol] : [])];
   REG_LAB_STATE.map = { [DEP]: { role: "dependent", tf: "none", tag: "both" } };
