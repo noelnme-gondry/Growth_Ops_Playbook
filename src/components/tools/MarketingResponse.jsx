@@ -34,12 +34,9 @@ import {
 } from "@/utils/responseCannibRank";
 import {
   REG_LAB_STATE,
-  regLabMakeSample,
-  regLabLoad,
   regLabReadMapping,
   regLabRun,
   regLabFromMmm,
-  _REG_ROLES,
 } from "@/utils/regLabMath";
 import { REG_FORECAST } from "@/utils/regForecastMath";
 import CsvUploader from "@/components/CsvUploader";
@@ -744,8 +741,6 @@ export default function MarketingResponse() {
   const mmmAnalyzed = mmmAnalyzedSig != null && mmmAnalyzedSig === colMapSig;
 
   // Lab 상태 (REG_LAB_STATE 전역 미러) — 별도 CSV
-  const [labVersion, setLabVersion] = useState(0);
-  const [labError, setLabError] = useState("");
 
   // Chart refs
   const cvRef = useRef(null);
@@ -1283,12 +1278,29 @@ export default function MarketingResponse() {
   // Stage ① simple-cannib chart 없음 (통계 카드만) — 잔차 산점도는 디퍼
 
   // Lab chart (actual vs predicted)
+  /* ------------------------------ LAB (③ 회귀·미래예측) ------------------------------ */
+  // ①②와 동일 CSV·매핑(shared colMap)을 그대로 사용 — 별도 업로드·샘플·매핑 없음. 채널 spend가
+  // 매핑돼 있으면 브리지로 회귀 역할(독립·이벤트·시간·종속) 자동 번역. mmm처럼 useMemo로 계산
+  // (effect+setState 회피). REG_LAB_STATE(전역)에 결과를 쓰고 fits/error를 반환.
+  const lab = useMemo(() => {
+    const bridgeReady = hasData && mmmColMap && Object.values(mmmColMap).some((d) => d && d.role === "channel");
+    if (stage !== "lab" || !mmmAnalyzed || !bridgeReady) return { fits: null, error: "" };
+    try {
+      if (!regLabFromMmm(csvData.raw, csvData.headers, mmmColMap, target)) {
+        return { fits: null, error: "회귀 모델을 만들 수 없습니다 — 채널 spend와 종속 타깃(가입/재활성) 매핑을 확인하세요." };
+      }
+      regLabRun();
+      return { fits: REG_LAB_STATE.fits, error: "" };
+    } catch (e) {
+      return { fits: null, error: e.message };
+    }
+  }, [stage, mmmColMap, mmmAnalyzed, hasData, csvData, target]);
+
   useEffect(() => {
     const inst = [];
-    if (stage === "lab" && labVersion > 0 && labChartRef.current && REG_LAB_STATE.fits) {
-      const fits = REG_LAB_STATE.fits;
-      const firstTag = Object.keys(fits)[0];
-      const f = fits[firstTag];
+    if (stage === "lab" && lab.fits && labChartRef.current) {
+      const firstTag = Object.keys(lab.fits)[0];
+      const f = lab.fits[firstTag];
       if (f) {
         const pred = f.fit.yhat || f.fit.fitted || [];
         inst.push(
@@ -1307,45 +1319,12 @@ export default function MarketingResponse() {
       }
     }
     return () => inst.forEach((c) => c && c.destroy());
-  }, [stage, labVersion]);
+  }, [stage, lab]);
 
-  /* ------------------------------ LAB actions ------------------------------ */
-  const runLabSample = () => {
-    setLabError("");
-    try {
-      const { rows, fields } = regLabMakeSample();
-      REG_LAB_STATE.fileName = "sample.csv";
-      regLabLoad(rows, fields);
-      regLabRun();
-      setLabVersion((v) => v + 1);
-    } catch (e) {
-      setLabError(e.message);
-      setLabVersion((v) => v + 1);
-    }
-  };
-  // 업로드한 MMM CSV + colMap 역할 → 회귀 역할로 번역해 lab에 로드(§12.15 브리지). "지가 어디서 컬럼
-  // 가져옴" 버그 수정: 샘플 대신 실제 업로드 데이터를 씀.
-  const mmmBridgeReady =
-    hasData && mmmColMap && Object.values(mmmColMap).some((d) => d && d.role === "channel");
-  const runLabFromMmm = (colMapArg) => {
-    setLabError("");
-    try {
-      REG_LAB_STATE.fileName = (csvData.fileName || "mmm_data.csv") + " (MMM)";
-      if (!regLabFromMmm(csvData.raw, csvData.headers, colMapArg || mmmColMap, target)) {
-        setLabError("MMM 데이터를 불러올 수 없습니다 — 채널 spend가 매핑됐는지 확인하세요.");
-        return;
-      }
-      regLabRun();
-      setLabVersion((v) => v + 1);
-    } catch (e) {
-      setLabError(e.message);
-      setLabVersion((v) => v + 1);
-    }
-  };
   const labForecast = useMemo(() => {
-    if (stage !== "lab" || labVersion === 0 || !REG_LAB_STATE.fits) return null;
+    if (stage !== "lab" || !lab.fits) return null;
     try {
-      const fits = REG_LAB_STATE.fits;
+      const fits = lab.fits;
       const firstTag = Object.keys(fits)[0];
       const f = fits[firstTag];
       if (!f) return null;
@@ -1369,7 +1348,7 @@ export default function MarketingResponse() {
     } catch (e) {
       return { ok: false, reason: e.message };
     }
-  }, [stage, labVersion]);
+  }, [stage, lab]);
 
   /* ------------------------------ RENDER ------------------------------ */
   // 아코디언 안 차트는 접힘 상태에서 폭 0으로 마운트됨(§7 함정) → 펼칠 때 resize 이벤트로 재측정.
@@ -1519,165 +1498,8 @@ export default function MarketingResponse() {
   );
 
   // ── LAB stage ──
-  if (stage === "lab") {
-    const fits = REG_LAB_STATE.fits;
-    const tags = fits ? Object.keys(fits) : [];
-    return (
-      <div className="tab-pane active" id="tab-response">
-        {renderTabs()}
-        <section className="block" id="s-prep">
-          <h2 className="section-title">📈 회귀 · 미래 예측</h2>
-          <p style={{ fontSize: "12px", color: MUTED, marginBottom: "12px" }}>
-            {mmmBridgeReady
-              ? "위 진단·MMM 탭에 올린 CSV를 그대로 회귀에 사용합니다 — 채널→비용(adstock), 더미→이벤트, 주차→시간, 활성 타깃→종속으로 자동 번역. 종속/독립 역할은 아래에서 수정 가능."
-              : "임의 CSV로 OLS 회귀 + 미래 예측(REG_FORECAST). 종속/독립(비용·이벤트·시간) 역할을 매핑해 계수·R²·실제vs예측·미래투영을 확인합니다."}
-          </p>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" }}>
-            {mmmBridgeReady && (
-              <button className="ab-pill active" style={{ borderColor: "rgba(122,162,247,0.5)" }} onClick={runLabFromMmm}>📊 MMM 데이터 불러오기</button>
-            )}
-            <button className={`ab-pill ${mmmBridgeReady ? "" : "active"}`} onClick={runLabSample}>▶ 샘플 데이터로 실행 (60주 데모)</button>
-          </div>
-          {labError && (
-            <div className="callout warning"><div className="ico">!</div><div className="body">{labError}</div></div>
-          )}
-        </section>
-
-        {fits && tags.length > 0 && (
-          <>
-            <section className="block" id="s-map">
-              <h2 className="section-title">🗂 컬럼 역할 매핑 (드래그로 지정)</h2>
-              {mmmBridgeReady ? (
-                <>
-                  <p style={{ fontSize: "11px", color: MUTED, margin: "0 0 10px", lineHeight: 1.55 }}>
-                    ①·② 탭과 <strong>같은 매핑</strong>을 씁니다 — 채널(spend)→독립(광고 여운 변환), 더미→이벤트, 주차→시간, 활성 타깃→종속으로 자동 번역돼 예측에 들어가요. 여기서 매핑을 바꾸면 예측도 바로 다시 계산됩니다.
-                  </p>
-                  <MmmColumnMapper
-                    headers={csvData.headers}
-                    rows={csvData.raw}
-                    colMap={mmmColMap || autoGuessColMap(csvData.headers, csvData.raw)}
-                    onChange={(next) => {
-                      setMmmColMap(next);
-                      runLabFromMmm(next);
-                    }}
-                  />
-                </>
-              ) : (
-                <div className="table-wrap">
-                  <table className="data" style={{ fontSize: "11.5px" }}>
-                    <thead>
-                      <tr><th>컬럼</th><th>역할</th><th>변환</th><th>태그(OS)</th></tr>
-                    </thead>
-                    <tbody>
-                      {REG_LAB_STATE.headers.map((c) => {
-                        const def = REG_LAB_STATE.map[c] || {};
-                        return (
-                          <tr key={c}>
-                            <td><strong>{c}</strong></td>
-                            <td>
-                              <select
-                                value={def.role || "ignore"}
-                                onChange={(e) => {
-                                  REG_LAB_STATE.map[c] = { ...def, role: e.target.value };
-                                  try {
-                                    regLabRun();
-                                    setLabError("");
-                                  } catch (err) {
-                                    setLabError(err.message);
-                                  }
-                                  setLabVersion((v) => v + 1);
-                                }}
-                              >
-                                {_REG_ROLES.map((r) => (
-                                  <option key={r} value={r}>{r}</option>
-                                ))}
-                              </select>
-                            </td>
-                            <td>{def.tf || "none"}</td>
-                            <td>{def.tag || "both"}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-
-            <section className="block" id="s-fit">
-              <h2 className="section-title">적합 결과 (모델별)</h2>
-              {tags.map((tag) => {
-                const f = fits[tag];
-                return (
-                  <div key={tag} style={{ marginBottom: "16px" }}>
-                    <h3 style={{ fontSize: "13px", margin: "8px 0" }}>
-                      모델: <strong>{f.m.dep}</strong> {tag !== "both" ? `(${tag})` : ""} · R²={f.fit.R2.toFixed(4)} · λ={f.lam}
-                    </h3>
-                    <div className="table-wrap">
-                      <table className="data" style={{ fontSize: "11.5px" }}>
-                        <thead>
-                          <tr><th>항목</th><th>β</th><th>SE</th><th>t</th><th>p</th><th>VIF</th></tr>
-                        </thead>
-                        <tbody>
-                          {f.terms.map((term, i) => (
-                            <tr key={term}>
-                              <td>{term}</td>
-                              <td className="tnum">{f.fit.beta[i]?.toFixed(4)}</td>
-                              <td className="tnum">{f.fit.se?.[i]?.toFixed(4) ?? "—"}</td>
-                              <td className="tnum">{f.fit.tvalues?.[i]?.toFixed(2) ?? "—"}</td>
-                              <td className="tnum">{f.fit.pval?.[i]?.toFixed(4) ?? "—"}</td>
-                              <td className="tnum">{i === 0 ? "—" : (f.vif[i - 1] === Infinity ? "∞" : f.vif[i - 1]?.toFixed(2))}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })}
-            </section>
-
-            <section className="block" id="s-chart">
-              <h2 className="section-title">실제 vs 예측</h2>
-              <div className="chart-container" style={{ height: "280px" }}>
-                <canvas ref={labChartRef}></canvas>
-              </div>
-            </section>
-
-            <section className="block" id="s-forecast-lab">
-              <h2 className="section-title">§7 미래 예측 (REG_FORECAST)</h2>
-              {labForecast && labForecast.ok ? (
-                <>
-                  <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px" }}>
-                    <div className="stat-card"><div className="lbl">예측 평균</div><div className="val">{fmtInt(labForecast.predFut.reduce((a, b) => a + b, 0) / labForecast.predFut.length)}</div></div>
-                    <div className="stat-card"><div className="lbl">과거 평균</div><div className="val">{fmtInt(labForecast.actual.reduce((a, b) => a + b, 0) / labForecast.actual.length)}</div></div>
-                    <div className="stat-card"><div className="lbl">R²</div><div className="val">{labForecast.r2?.toFixed(3)}</div></div>
-                  </div>
-                  <div className="table-wrap">
-                    <table className="data" style={{ fontSize: "11.5px" }}>
-                      <thead><tr><th>기간</th><th>예측</th><th>하한</th><th>상한</th></tr></thead>
-                      <tbody>
-                        {labForecast.futLabels.map((lb, i) => (
-                          <tr key={lb + i}>
-                            <td>{lb}</td>
-                            <td className="tnum">{fmtInt(labForecast.predFut[i])}</td>
-                            <td className="tnum">{fmtInt(labForecast.lo[i])}</td>
-                            <td className="tnum">{fmtInt(labForecast.hi[i])}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              ) : (
-                <div className="callout warn"><div className="ico">!</div><div className="body">{labForecast?.reason || "예측 준비 중 — 종속·독립 변수를 매핑하세요."}</div></div>
-              )}
-            </section>
-          </>
-        )}
-      </div>
-    );
-  }
+  // ③ 회귀·미래예측(lab)은 이제 ①②와 동일하게 no-data→shared 게이트→분석완료 흐름을 타므로
+  // 여기서 early-return하지 않는다(별도 업로드·샘플·매핑 제거). 실제 렌더는 아래 analyzed return에서.
 
   // ── no-data ──
   if (!hasData) {
@@ -1718,6 +1540,102 @@ export default function MarketingResponse() {
       ) : (
         <>
           {controlBar()}
+
+          {/* ── STAGE ③ LAB (회귀·미래예측) — ①②와 동일 CSV·매핑 자동 사용 ── */}
+          {stage === "lab" && (() => {
+            const fits = lab.fits;
+            const tags = fits ? Object.keys(fits) : [];
+            return (
+              <>
+                <section className="block" id="s-prep">
+                  <h2 className="section-title">📈 회귀 · 미래 예측</h2>
+                  <p style={{ fontSize: "12px", color: MUTED, marginBottom: "8px", lineHeight: 1.55 }}>
+                    ①·② 탭과 <strong>같은 CSV·매핑</strong>을 그대로 씁니다 — 매핑을 바꾸려면 상단 &quot;매핑 수정&quot;에서 고치면 세 탭에 함께 반영돼요. 채널→독립(광고 여운), 더미→이벤트, 주차→시간, 활성 타깃({mmm.target})→종속으로 번역해 다음 몇 주를 예측합니다.
+                  </p>
+                  {lab.error && (
+                    <div className="callout warning"><div className="ico">!</div><div className="body">{lab.error}</div></div>
+                  )}
+                </section>
+                {fits && tags.length > 0 ? (
+                  <>
+                    <section className="block" id="s-fit">
+                      <h2 className="section-title">적합 결과 (모델별)</h2>
+                      {tags.map((tag) => {
+                        const f = fits[tag];
+                        return (
+                          <div key={tag} style={{ marginBottom: "16px" }}>
+                            <h3 style={{ fontSize: "13px", margin: "8px 0" }}>
+                              모델: <strong>{f.m.dep}</strong> {tag !== "both" ? `(${tag})` : ""} · R²={f.fit.R2.toFixed(4)} · λ={f.lam}
+                            </h3>
+                            <div className="table-wrap">
+                              <table className="data" style={{ fontSize: "11.5px" }}>
+                                <thead>
+                                  <tr><th>항목</th><th>β</th><th>SE</th><th>t</th><th>p</th><th>VIF</th></tr>
+                                </thead>
+                                <tbody>
+                                  {f.terms.map((term, i) => (
+                                    <tr key={term}>
+                                      <td>{term}</td>
+                                      <td className="tnum">{f.fit.beta[i]?.toFixed(4)}</td>
+                                      <td className="tnum">{f.fit.se?.[i]?.toFixed(4) ?? "—"}</td>
+                                      <td className="tnum">{f.fit.tvalues?.[i]?.toFixed(2) ?? "—"}</td>
+                                      <td className="tnum">{f.fit.pval?.[i]?.toFixed(4) ?? "—"}</td>
+                                      <td className="tnum">{i === 0 ? "—" : (f.vif[i - 1] === Infinity ? "∞" : f.vif[i - 1]?.toFixed(2))}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </section>
+
+                    <section className="block" id="s-chart">
+                      <h2 className="section-title">실제 vs 예측</h2>
+                      <div className="chart-container" style={{ height: "280px" }}>
+                        <canvas ref={labChartRef}></canvas>
+                      </div>
+                    </section>
+
+                    <section className="block" id="s-forecast-lab">
+                      <h2 className="section-title">§7 미래 예측 (REG_FORECAST)</h2>
+                      {labForecast && labForecast.ok ? (
+                        <>
+                          <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px" }}>
+                            <div className="stat-card"><div className="lbl">예측 평균</div><div className="val">{fmtInt(labForecast.predFut.reduce((a, b) => a + b, 0) / labForecast.predFut.length)}</div></div>
+                            <div className="stat-card"><div className="lbl">과거 평균</div><div className="val">{fmtInt(labForecast.actual.reduce((a, b) => a + b, 0) / labForecast.actual.length)}</div></div>
+                            <div className="stat-card"><div className="lbl">R²</div><div className="val">{labForecast.r2?.toFixed(3)}</div></div>
+                          </div>
+                          <div className="table-wrap">
+                            <table className="data" style={{ fontSize: "11.5px" }}>
+                              <thead><tr><th>기간</th><th>예측</th><th>하한</th><th>상한</th></tr></thead>
+                              <tbody>
+                                {labForecast.futLabels.map((lb, i) => (
+                                  <tr key={lb + i}>
+                                    <td>{lb}</td>
+                                    <td className="tnum">{fmtInt(labForecast.predFut[i])}</td>
+                                    <td className="tnum">{fmtInt(labForecast.lo[i])}</td>
+                                    <td className="tnum">{fmtInt(labForecast.hi[i])}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="callout warn"><div className="ico">!</div><div className="body">{labForecast?.reason || "예측 준비 중 — 종속·독립 변수를 매핑하세요."}</div></div>
+                      )}
+                    </section>
+                  </>
+                ) : (
+                  <section className="block">
+                    <p className="muted" style={{ fontSize: "12px" }}>회귀 모델을 준비 중이거나 만들 수 없어요 — 채널 spend와 종속 타깃({mmm.target}) 매핑을 확인하세요.</p>
+                  </section>
+                )}
+              </>
+            );
+          })()}
 
           {/* ── STAGE ① DIAGNOSE (MMM panel) ── */}
           {stage === "diagnose" && (
