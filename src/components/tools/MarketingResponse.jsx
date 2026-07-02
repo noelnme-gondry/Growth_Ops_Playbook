@@ -202,6 +202,64 @@ function csvColL(n) {
 }
 const _today = () => new Date().toISOString().slice(0, 10);
 
+// 텍스트(.md) 다운로드 — "이 과정 자세히" 문서용.
+function textDownload(name, text) {
+  const blob = new Blob(["﻿" + text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+}
+
+// 카니발 진단 전 과정을 평어+전문 병기로 설명하는 자체완결 문서(현재 결과 요약 포함).
+function buildCannibGuideDoc(cannib, targetKo) {
+  const L = [];
+  L.push(`# 카니발(잠식) 진단 — 이 분석은 무엇이고 어떻게 판정하나`);
+  L.push("");
+  L.push(`대상 지표: ${targetKo} · 생성일: ${_today()}`);
+  L.push("");
+  L.push(`## 한 줄 요약`);
+  L.push(`"카니발리제이션(잠식)"은 유료 광고가, 원래 광고 없이도 공짜로 들어왔을 오가닉(자연) 유입을 갉아먹는 현상입니다. 이 도구는 채널마다 "그 채널 광고가 오가닉을 잠식하는가?"를 4가지 서로 다른 각도로 따져보고, 그 결과를 종합해 **잠식 의심 / 애매함 / 문제 없음** 세 칸으로 분류합니다.`);
+  L.push("");
+  L.push(`## 왜 중요한가`);
+  L.push(`광고 대시보드에 찍히는 전환은 "광고가 새로 만든 것"과 "원래 왔을 사람을 광고가 가로챈 것"이 섞여 있습니다. 뒤쪽(잠식)이 크면, 광고를 꺼도 성과가 별로 안 줄어드는데도 예산만 계속 쓰게 됩니다. 그래서 "이 채널을 늘려야 하나?"의 답이 달라집니다.`);
+  L.push("");
+  L.push(`## 4가지 신호 (각 채널마다 따져보는 것)`);
+  L.push(`- **① 광고를 늘리기 전에 이미 줄고 있었나?** — 저지출 구간에서 오가닉이 이미 하락 추세였다면, 그 하락은 광고 탓이 아닐 가능성이 큽니다. (전문: 저지출 구간 기울기 검정)`);
+  L.push(`- **② 시즌·추세를 걷어내도 광고 늘 때 오가닉이 줄어드나?** — 계절성·전반 추세를 제거한 뒤에도 광고비↑ 시 오가닉↓이면 잠식이 의심됩니다. (전문: 탈추세·1차차분 상관)`);
+  L.push(`- **③ 광고를 늘리면 (잠식을 빼고도) 전체 성과가 순증가하나?** — 잠식분을 감안하고도 전체가 순으로 늘면 방어 양호입니다. (전문: 순증분 탄력성, 95% 신뢰구간)`);
+  L.push(`- **④ 광고비가 몇 주 뒤에 오가닉을 끌어내리나?** — ①~③은 "같은 주"만 봅니다. ④는 시차를 두고(예: 3~6주 뒤) 광고비가 오가닉을 떨어뜨리는지 봅니다. (전문: 그랜저 인과, prewhitening 후 F-검정)`);
+  L.push(`- **⑤ 충격 반응(IRF)** — 지출을 한 번 확 늘렸을 때 이후 몇 주간 성과가 어떻게 반응하는지 곡선으로 봅니다. 아래로 내려가면 시차 잠식, 위로 올라가면 시차 증분.`);
+  L.push("");
+  L.push(`## 판정은 어떻게 종합하나 (입증책임 비대칭)`);
+  L.push(`- **문제 없음(방어 양호)**: 네 방향 모두 뚜렷한 잠식 신호가 없을 때만. "잠식 신호가 없다"는 강한 증거가 있어야 OK를 줍니다.`);
+  L.push(`- **잠식 의심**: 어느 한 신호라도 잠식을 가리키면(특히 ④ 시차 신호가 있으면) 의심으로 올립니다. 같은 주 지표가 괜찮아도 시차에서 걸리면 의심입니다.`);
+  L.push(`- **애매함(판단 보류)**: 데이터가 부족하거나(집행 주 수가 적음) 채널끼리 지출이 거의 똑같이 움직여(공선) 서로 구분이 안 되면, 억지로 판정하지 않고 보류합니다.`);
+  L.push("");
+  L.push(`## 꼭 기억할 것`);
+  L.push(`이 진단은 전부 **"연관(association)"**이지 **"인과(causation)"**가 아닙니다. 관측 데이터만으로는 "광고가 잠식을 유발했다"를 확정할 수 없습니다. 이 도구의 역할은 **의심 채널을 좁혀주는 것**이고, 확정은 반드시 **홀드아웃(geo/시간 분할) 실험**으로 해야 합니다. "잠식 의심" 칸의 채널부터 실험 1순위로 검토하세요.`);
+  L.push("");
+  if (cannib && cannib.cannibRank && cannib.cannibRank.length) {
+    L.push(`## 현재 데이터 판정 요약`);
+    for (const r of cannib.cannibRank) {
+      const lv = mmmCannibLevel(r);
+      const bucket = !r.eligible || lv.lv === 1 ? "애매함(판단 보류)" : lv.lv >= 4 ? "잠식 의심" : "문제 없음";
+      L.push(`- **${r.label}** → ${bucket}${r.eligible ? "" : ` (데이터 부족 ${r.nActive}/${r.total}주)`}`);
+    }
+    L.push("");
+  }
+  L.push(`## 함께 보는 다른 분석`);
+  L.push(`- **추세 존재성**: 성과에 광고와 무관한 시간 흐름 자체의 추세가 있는지(STL 분해 + Mann-Kendall·ADF·KPSS 검정).`);
+  L.push(`- **데이터 위생**: 분석 전에 데이터가 깨끗한지(결측·연속성) + 작년 대비 지표 변화.`);
+  L.push(`- **단순 모델 점검**: "모든 지출을 하나로 뭉친 대충 만든 모델"이 왜 못 믿을 만한지(자기상관·공선성) 확인.`);
+  L.push("");
+  L.push(`— Growth Ops Playbook · 마케팅 반응 분석(MMM)`);
+  return L.join("\n");
+}
+
 /* ── §7 살아있는 수식 예측 CSV (index downloadMmmForecastCsv 이식) ──
  * spend 칸을 바꾸면 adstock→ln→예측이 엑셀 수식으로 자동 연쇄 계산.  */
 function buildForecastCsv(fc, target) {
@@ -1599,13 +1657,28 @@ export default function MarketingResponse() {
                   </div>
 
               <section className="block" id="s-trend">
-                <h2 className="section-title">추세 존재성 — {mmm.target}</h2>
+                <h2 className="section-title">성과에 광고와 무관한 &apos;추세&apos;가 있나요?</h2>
+                <p className="muted" style={{ fontSize: "12px", marginBottom: "8px" }}>시간이 흐르며 성과가 저절로 오르내리는 흐름(추세)이 있는지 봐요. 추세가 크면, 광고 효과와 헷갈리지 않게 따로 떼어내야 해요.</p>
                 {trend ? (
                   <>
-                    <div className={`callout ${trend.verdict.startsWith("trend EXISTS") ? "warn" : "ok"}`}>
-                      <div className="ico">{trend.verdict.startsWith("NO") ? "✓" : "!"}</div>
-                      <div className="body"><strong>{trend.verdict}</strong><p style={{ fontSize: "11.5px", marginTop: "4px" }}>STL 추세 변화 {trend.stl_pct}%</p></div>
-                    </div>
+                    {(() => {
+                      const isNo = trend.verdict.startsWith("NO");
+                      const isYes = trend.verdict.startsWith("trend EXISTS");
+                      const plain = isNo
+                        ? "뚜렷한 추세는 없어요 — 성과 등락은 대부분 광고·계절 영향입니다."
+                        : isYes
+                          ? "추세가 있어요 — 광고를 걷어내도 시간 흐름 자체의 상승/하락이 남습니다."
+                          : "추세가 조금 있지만 광고·계절과 얽혀 있어요.";
+                      return (
+                        <div className={`callout ${isNo ? "ok" : "warn"}`}>
+                          <div className="ico">{isNo ? "✓" : "!"}</div>
+                          <div className="body">
+                            <strong>{plain}</strong>
+                            <p style={{ fontSize: "11px", color: MUTED, marginTop: "4px" }} title={trend.verdict}>전 구간 추세 변화 {trend.stl_pct}% · 판정 근거: {trend.verdict}</p>
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <div className="chart-container" style={{ height: "240px", marginTop: "12px" }}>
                       <canvas ref={trendRef}></canvas>
                     </div>
@@ -1630,9 +1703,9 @@ export default function MarketingResponse() {
 
               {/* ── §1 데이터 위생 + 매크로 사실 (모델 독립) ── */}
               <section className="block" id="s-macro">
-                <h2 className="section-title">§1 데이터 위생 + 매크로 사실 (모델 독립)</h2>
+                <h2 className="section-title">데이터가 분석하기에 깨끗한가요?</h2>
                 <p className="muted" style={{ fontSize: "12px" }}>
-                  스키마/연속성/결측을 모델링 전 검증. 매크로 = spend YoY vs KPI YoY (가장 강한 model-free 헤드라인).
+                  분석 전에 데이터에 빠진 주·이상한 값이 없는지 점검하고, 작년 대비 지출·성과가 얼마나 변했는지(가장 단순하고 확실한 비교)를 봐요.
                 </p>
                 <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", margin: "8px 0" }}>
                   <div className="stat-card"><div className="lbl">주 수(n)</div><div className="val">{mmm.derived.n}</div></div>
@@ -1680,9 +1753,9 @@ export default function MarketingResponse() {
                 const f = (v, d = 2) => (v == null || !isFinite(v) ? "—" : (+v).toFixed(d));
                 return (
                   <section className="block" id="s-audit">
-                    <h2 className="section-title">§2 &quot;단순 모델&quot; audit — 흔한 함정 점검</h2>
+                    <h2 className="section-title">&apos;대충 뭉친 모델&apos;은 왜 못 믿나요?</h2>
                     <p className="muted" style={{ fontSize: "12px" }}>
-                      모든 유료 지출을 <strong>하나로 뭉친 단순(naive) 모델</strong>(ln_총지출 = 전 채널 합산, 브랜드 제외 + 계절·더미·추세)을 재현해, 그 모델이 통계적으로 믿을 만한지 점검. target=RR · n={a.n} · R²={f(a.r2, 4)} adjR²={f(a.adj_r2, 4)} · HAC maxlags={a.hac_maxlags}.
+                      모든 채널 지출을 <strong>하나로 뭉쳐 대충 만든 모델</strong>이 흔히 빠지는 함정(자기상관을 무시해 과신하거나, 채널끼리 겹쳐 계수가 출렁이는 것)을 보여줘요 — 그래서 채널을 나누고 광고 잔효·수확체감을 반영한 제대로 된 MMM(② 기여 분해)이 필요합니다. <span title={`target=RR · n=${a.n} · R²=${f(a.r2, 4)} adjR²=${f(a.adj_r2, 4)} · HAC maxlags=${a.hac_maxlags}`}>(전문 수치는 여기 마우스오버)</span>
                     </p>
                     <div className="table-wrap" style={{ marginTop: "6px" }}>
                       <table className="data" style={{ fontSize: "11px" }}>
@@ -1743,6 +1816,14 @@ export default function MarketingResponse() {
               })()}
                 </div>
               </details>
+
+              {/* ── 맨 밑: 전 과정 상세 설명 문서 다운로드 ── */}
+              <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+                <button className="ab-button"
+                  onClick={() => textDownload(`카니발_진단_설명_${mmm.target}_${_today()}.md`, buildCannibGuideDoc(cannib, mmm.target === "Regs" ? "가입" : mmm.target === "React" ? "재활성" : mmm.target))}>
+                  📄 이 과정에 대한 자세한 설명이 듣고 싶으신가요? — 상세 문서 받기
+                </button>
+              </div>
             </>
           )}
 
