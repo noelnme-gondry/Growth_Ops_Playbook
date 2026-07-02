@@ -1755,7 +1755,10 @@ export default function MarketingResponse() {
                   <section className="block" id="s-audit">
                     <h2 className="section-title">&apos;대충 뭉친 모델&apos;은 왜 못 믿나요?</h2>
                     <p className="muted" style={{ fontSize: "12px" }}>
-                      모든 채널 지출을 <strong>하나로 뭉쳐 대충 만든 모델</strong>이 흔히 빠지는 함정(자기상관을 무시해 과신하거나, 채널끼리 겹쳐 계수가 출렁이는 것)을 보여줘요 — 그래서 채널을 나누고 광고 잔효·수확체감을 반영한 제대로 된 MMM(② 기여 분해)이 필요합니다. <span title={`target=RR · n=${a.n} · R²=${f(a.r2, 4)} adjR²=${f(a.adj_r2, 4)} · HAC maxlags=${a.hac_maxlags}`}>(전문 수치는 여기 마우스오버)</span>
+                      모든 채널 지출을 <strong>하나로 뭉쳐 대충 만든 모델</strong>이 흔히 빠지는 함정(자기상관을 무시해 과신하거나, 채널끼리 겹쳐 계수가 출렁이는 것)을 보여줘요 — 그래서 채널을 나누고 광고 잔효·수확체감을 반영한 제대로 된 MMM(② 기여 분해)이 필요합니다.
+                    </p>
+                    <p style={{ fontSize: "11px", color: MUTED, marginTop: "2px" }}>
+                      target=RR · n={a.n} · R²={f(a.r2, 4)} · adjR²={f(a.adj_r2, 4)} · HAC maxlags={a.hac_maxlags}
                     </p>
                     <div className="table-wrap" style={{ marginTop: "6px" }}>
                       <table className="data" style={{ fontSize: "11px" }}>
