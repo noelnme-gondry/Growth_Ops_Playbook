@@ -995,25 +995,29 @@ export default function MarketingResponse() {
           }),
         );
       }
-      // Decomp stacked area (baseline + cumulative contribution)
+      // Decomp stacked area (비매체 합산 밴드 + 채널별 누적) — baseline·Trend·Seasonality·Holidays·
+      // Regime을 개별 boundary로 그리면 서로 교차하는 대각선처럼 보여 혼란스러움(§ 실사용 피드백) →
+      // 비매체는 하나로 합쳐 "시즌·추세 등" 단일 밴드로, 채널만 그 위에 개별 누적.
       if (decompRef.current && decomp) {
         const labels = decomp.weeks.map((w, i) => mmm.panel.weekLabel?.[i] || w.week);
         const drawGroups = decomp.groupNames;
-        const palette = ["#565f89", "#7aa2f7", "#f7768e", "#9ece6a", "#e0af68", "#bb9af7", "#7dcfff", "#ff9e64"];
-        // 누적 스택: baseline 먼저, 그 위로 각 그룹 contrib 누적
+        const mediaGroups = drawGroups.filter((g) => !MMM_NONMEDIA_GROUPS.includes(g));
+        const nonMediaGroups = drawGroups.filter((g) => MMM_NONMEDIA_GROUPS.includes(g));
+        const palette = ["#7aa2f7", "#f7768e", "#9ece6a", "#e0af68", "#bb9af7", "#7dcfff", "#ff9e64", "#2ac3de"];
         const datasets = [];
+        const nonMediaSum = decomp.weeks.map((w) => w.baseline + nonMediaGroups.reduce((s, g) => s + (w.contrib[g] || 0), 0));
         datasets.push({
-          label: "baseline",
-          data: decomp.weeks.map((w) => w.baseline),
+          label: "시즌·추세 등 (비매체)",
+          data: nonMediaSum,
           backgroundColor: "rgba(86,95,137,0.35)",
           borderColor: "#565f89",
           fill: "origin",
           pointRadius: 0,
           tension: 0.2,
         });
-        let cum = decomp.weeks.map((w) => w.baseline);
-        drawGroups.forEach((g, i) => {
-          cum = cum.map((v, t) => v + decomp.weeks[t].contrib[g]);
+        let cum = nonMediaSum.slice();
+        mediaGroups.forEach((g, i) => {
+          cum = cum.map((v, t) => v + (decomp.weeks[t].contrib[g] || 0));
           datasets.push({
             label: g,
             data: cum.slice(),
@@ -1050,17 +1054,47 @@ export default function MarketingResponse() {
         };
         decompOpts.scales.x.ticks = { ...decompOpts.scales.x.ticks, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 };
         decompOpts.scales.y.ticks = { ...decompOpts.scales.y.ticks, callback: (v) => Math.round(v).toLocaleString() };
+        // 튀는 구간 메모를 입력하면 그 주에 세로 점선 + 라벨을 그려 위치를 바로 보이게 함(직접 그리는 인라인 플러그인).
+        const notedSpikes = (decomp.spikes || []).filter((s) => (spikeNotes[`${mmm.target}|${s.week}`] || "").trim());
+        const spikeLinePlugin = {
+          id: "spikeLines",
+          afterDraw(chart) {
+            if (!notedSpikes.length) return;
+            const { ctx, chartArea, scales } = chart;
+            ctx.save();
+            notedSpikes.forEach((s) => {
+              const idx = s.i != null ? s.i : s.week - 1;
+              const x = scales.x.getPixelForValue(idx);
+              if (x < chartArea.left || x > chartArea.right) return;
+              ctx.strokeStyle = "#fbbf24";
+              ctx.setLineDash([4, 3]);
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(x, chartArea.top);
+              ctx.lineTo(x, chartArea.bottom);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = "#fbbf24";
+              ctx.font = "10px sans-serif";
+              ctx.textAlign = "center";
+              const note = spikeNotes[`${mmm.target}|${s.week}`] || "";
+              ctx.fillText(note.length > 16 ? note.slice(0, 16) + "…" : note, x, chartArea.top + 10);
+            });
+            ctx.restore();
+          },
+        };
         inst.push(
           new Chart(decompRef.current.getContext("2d"), {
             type: "line",
             data: { labels, datasets },
             options: decompOpts,
+            plugins: [spikeLinePlugin],
           }),
         );
       }
     }
     return () => inst.forEach((c) => c && c.destroy());
-  }, [stage, mmm, decomp]);
+  }, [stage, mmm, decomp, spikeNotes]);
 
   // Stage ③ forecast chart
   useEffect(() => {
@@ -1977,12 +2011,12 @@ export default function MarketingResponse() {
                 {shRows.length ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "6px" }}>
                     {shRows.map((r) => (
-                      <div key={r.driver} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                        <span style={{ width: "96px", fontSize: "12.5px", textAlign: "right", color: "var(--text-1)" }}>{plainDrv(r.driver)}</span>
-                        <div style={{ flex: 1, background: "var(--bg-1)", borderRadius: "6px", height: "20px" }}>
+                      <div key={r.driver} style={{ display: "grid", gridTemplateColumns: "minmax(0,max-content) 1fr 44px", alignItems: "center", gap: "10px" }}>
+                        <span style={{ fontSize: "12.5px", textAlign: "left", color: "var(--text-1)", whiteSpace: "nowrap" }} title={r.driver}>{plainDrv(r.driver)}</span>
+                        <div style={{ background: "var(--bg-1)", borderRadius: "6px", height: "20px", minWidth: 0 }}>
                           <div style={{ width: `${Math.round((r.pct || 0) / maxPct * 100)}%`, minWidth: "2px", background: barColor(r.driver), height: "100%", borderRadius: "6px" }}></div>
                         </div>
-                        <span style={{ width: "44px", fontSize: "12.5px", fontWeight: 600 }}>{(r.pct || 0).toFixed(0)}%</span>
+                        <span style={{ fontSize: "12.5px", fontWeight: 600, textAlign: "right" }}>{(r.pct || 0).toFixed(0)}%</span>
                       </div>
                     ))}
                   </div>
