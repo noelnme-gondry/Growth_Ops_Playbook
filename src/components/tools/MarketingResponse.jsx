@@ -1327,11 +1327,11 @@ export default function MarketingResponse() {
   // 가져옴" 버그 수정: 샘플 대신 실제 업로드 데이터를 씀.
   const mmmBridgeReady =
     hasData && mmmColMap && Object.values(mmmColMap).some((d) => d && d.role === "channel");
-  const runLabFromMmm = () => {
+  const runLabFromMmm = (colMapArg) => {
     setLabError("");
     try {
       REG_LAB_STATE.fileName = (csvData.fileName || "mmm_data.csv") + " (MMM)";
-      if (!regLabFromMmm(csvData.raw, csvData.headers, mmmColMap, target)) {
+      if (!regLabFromMmm(csvData.raw, csvData.headers, colMapArg || mmmColMap, target)) {
         setLabError("MMM 데이터를 불러올 수 없습니다 — 채널 spend가 매핑됐는지 확인하세요.");
         return;
       }
@@ -1546,45 +1546,62 @@ export default function MarketingResponse() {
         {fits && tags.length > 0 && (
           <>
             <section className="block" id="s-map">
-              <h2 className="section-title">역할 매핑</h2>
-              <div className="table-wrap">
-                <table className="data" style={{ fontSize: "11.5px" }}>
-                  <thead>
-                    <tr><th>컬럼</th><th>역할</th><th>변환</th><th>태그(OS)</th></tr>
-                  </thead>
-                  <tbody>
-                    {REG_LAB_STATE.headers.map((c) => {
-                      const def = REG_LAB_STATE.map[c] || {};
-                      return (
-                        <tr key={c}>
-                          <td><strong>{c}</strong></td>
-                          <td>
-                            <select
-                              value={def.role || "ignore"}
-                              onChange={(e) => {
-                                REG_LAB_STATE.map[c] = { ...def, role: e.target.value };
-                                try {
-                                  regLabRun();
-                                  setLabError("");
-                                } catch (err) {
-                                  setLabError(err.message);
-                                }
-                                setLabVersion((v) => v + 1);
-                              }}
-                            >
-                              {_REG_ROLES.map((r) => (
-                                <option key={r} value={r}>{r}</option>
-                              ))}
-                            </select>
-                          </td>
-                          <td>{def.tf || "none"}</td>
-                          <td>{def.tag || "both"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <h2 className="section-title">🗂 컬럼 역할 매핑 (드래그로 지정)</h2>
+              {mmmBridgeReady ? (
+                <>
+                  <p style={{ fontSize: "11px", color: MUTED, margin: "0 0 10px", lineHeight: 1.55 }}>
+                    ①·② 탭과 <strong>같은 매핑</strong>을 씁니다 — 채널(spend)→독립(광고 여운 변환), 더미→이벤트, 주차→시간, 활성 타깃→종속으로 자동 번역돼 예측에 들어가요. 여기서 매핑을 바꾸면 예측도 바로 다시 계산됩니다.
+                  </p>
+                  <MmmColumnMapper
+                    headers={csvData.headers}
+                    rows={csvData.raw}
+                    colMap={mmmColMap || autoGuessColMap(csvData.headers, csvData.raw)}
+                    onChange={(next) => {
+                      setMmmColMap(next);
+                      runLabFromMmm(next);
+                    }}
+                  />
+                </>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data" style={{ fontSize: "11.5px" }}>
+                    <thead>
+                      <tr><th>컬럼</th><th>역할</th><th>변환</th><th>태그(OS)</th></tr>
+                    </thead>
+                    <tbody>
+                      {REG_LAB_STATE.headers.map((c) => {
+                        const def = REG_LAB_STATE.map[c] || {};
+                        return (
+                          <tr key={c}>
+                            <td><strong>{c}</strong></td>
+                            <td>
+                              <select
+                                value={def.role || "ignore"}
+                                onChange={(e) => {
+                                  REG_LAB_STATE.map[c] = { ...def, role: e.target.value };
+                                  try {
+                                    regLabRun();
+                                    setLabError("");
+                                  } catch (err) {
+                                    setLabError(err.message);
+                                  }
+                                  setLabVersion((v) => v + 1);
+                                }}
+                              >
+                                {_REG_ROLES.map((r) => (
+                                  <option key={r} value={r}>{r}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td>{def.tf || "none"}</td>
+                            <td>{def.tag || "both"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
 
             <section className="block" id="s-fit">
@@ -2309,8 +2326,8 @@ export default function MarketingResponse() {
                       );
                     })}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: "10px", alignItems: "start" }}>
-                    <div className="chart-container" style={{ height: "280px", minHeight: "280px" }}><canvas ref={satRef}></canvas></div>
+                  <div>
+                    <div className="chart-container" style={{ height: "340px", minHeight: "340px", marginBottom: "12px" }}><canvas ref={satRef}></canvas></div>
                     <div>
                       <div className="table-wrap">
                         <table className="data" style={{ fontSize: "11px" }}>
