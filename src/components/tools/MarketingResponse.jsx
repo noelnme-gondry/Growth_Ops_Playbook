@@ -42,6 +42,7 @@ import {
   _REG_ROLES,
 } from "@/utils/regLabMath";
 import { REG_FORECAST } from "@/utils/regForecastMath";
+import { getCssVar } from "@/utils/chartUtils";
 import CsvUploader from "@/components/CsvUploader";
 import MmmColumnMapper, { autoGuessColMap, buildPanelFromColMap, mmmPlatformTags } from "@/components/tools/MmmColumnMapper";
 
@@ -639,6 +640,22 @@ const MMM_STAGE_DEFS = [
   { id: "lab", no: "③ 미래 예측", title: "회귀 · 미래 예측", icon: "📈", desc: "이대로 가면, 또는 예산을 바꾸면 다음 몇 주 성과는 어떻게 될까?" },
 ];
 
+// ② 기여 분해 스택 차트 버킷 — 12+ 드라이버를 마케터가 한눈에 읽는 4묶음으로.
+// 엔진 groupNames→버킷 매핑(수학 불변, 표시 그룹핑만). tone은 다크/라이트 둘 다 읽히는 중간 채도.
+const MMM_BUCKET_META = {
+  base: { label: "기본 수요", tone: "#94a3b8" },
+  season: { label: "시즌·추세", tone: "#38bdf8" },
+  event: { label: "이벤트·구조변화", tone: "#f59e0b" },
+  media: { label: "광고 효과", tone: "#8b7ff0" },
+};
+function decompBucketOf(g) {
+  if (g === "Trend" || g === "Seasonality") return "season";
+  if (g === "Holidays" || g === "Regime(steps)") return "event";
+  return MMM_NONMEDIA_GROUPS.includes(g) ? "event" : "media";
+}
+// 개별 채널(광고) 밴드용 팔레트 — 보라 계열 명도차. hex+alpha는 fill에만.
+const MMM_MEDIA_PALETTE = ["#8b7ff0", "#a78bfa", "#c084fc", "#e879f9", "#7dd3fc", "#67e8f9"];
+
 // 차트 테마·공통 옵션 — 컴포넌트 밖(상수)로 두어 effect 의존성 안정화
 const CHART_THEME = { text: "#334155", muted: "#64748b", grid: "#e2e8f0" };
 function chartBase() {
@@ -663,6 +680,7 @@ export default function MarketingResponse() {
   const [stage, setStage] = useState("diagnose"); // diagnose | mmm | lab
   const [target, setTarget] = useState("Regs");
   const [decompModel, setDecompModel] = useState("ols"); // ols | ridge (merge/ridge 토글)
+  const [decompGrouped, setDecompGrouped] = useState(true); // §5.5 true=4버킷 묶음 / false=광고 개별채널
   const [spikeNotes, setSpikeNotes] = useState({}); // §5.5 튀는 구간 메모 { [target|week]: note }
   const [fcHorizon, setFcHorizon] = useState(13);
   const [fcBand, setFcBand] = useState("mean"); // mean | pred
@@ -1002,55 +1020,77 @@ export default function MarketingResponse() {
           }),
         );
       }
-      // Decomp stacked area (비매체 합산 밴드 + 채널별 누적) — baseline·Trend·Seasonality·Holidays·
-      // Regime을 개별 boundary로 그리면 서로 교차하는 대각선처럼 보여 혼란스러움(§ 실사용 피드백) →
-      // 비매체는 하나로 합쳐 "시즌·추세 등" 단일 밴드로, 채널만 그 위에 개별 누적.
+      // Decomp stacked area — 기준선(기본 수요) 위에 버킷/채널을 누적. 맨 위 누적선 = 모델(fitted).
+      // 그룹모드: 4버킷(기본·시즌추세·이벤트·광고). 개별모드: 비매체 버킷 + 광고를 채널별로 각각 누적.
+      // 어느 모드든 모든 밴드를 기준선 위로 쌓아 최상단이 모델선과 일치(=아래 텍스트의 "모델"과 sum 일치).
       if (decompRef.current && decomp) {
         const labels = decomp.weeks.map((w, i) => mmm.panel.weekLabel?.[i] || w.week);
-        const drawGroups = decomp.groupNames;
-        const mediaGroups = drawGroups.filter((g) => !MMM_NONMEDIA_GROUPS.includes(g));
-        const nonMediaSum = nonMediaSeries;
-        const palette = ["#7aa2f7", "#f7768e", "#9ece6a", "#e0af68", "#bb9af7", "#7dcfff", "#ff9e64", "#2ac3de"];
-        const datasets = [];
-        datasets.push({
-          label: "시즌·추세 등 (비매체)",
-          data: nonMediaSum,
-          backgroundColor: "rgba(86,95,137,0.35)",
-          borderColor: "#565f89",
-          fill: "origin",
-          pointRadius: 0,
-          tension: 0.2,
-        });
-        let cum = nonMediaSum.slice();
-        mediaGroups.forEach((g, i) => {
-          cum = cum.map((v, t) => v + (decomp.weeks[t].contrib[g] || 0));
-          datasets.push({
-            label: g,
-            data: cum.slice(),
-            backgroundColor: palette[i % palette.length] + "55",
-            borderColor: palette[i % palette.length],
-            fill: "-1",
-            pointRadius: 0,
-            tension: 0.2,
+        const textCol = getCssVar("--text-1") || CHART_THEME.text;
+        const baseData = decomp.weeks.map((w) => w.baseline);
+        // 버킷별 주간 합 시계열
+        const bucketSeries = (bucket) =>
+          decomp.weeks.map((w) =>
+            decomp.groupNames.reduce((s, g) => (decompBucketOf(g) === bucket ? s + (w.contrib[g] || 0) : s), 0),
+          );
+        // 쌓을 밴드 정의: [{label, series(주간 기여), tone}] — 아래→위 순서
+        const bands = [];
+        // 기본 수요(baseline)는 원점~baseline 절대 밴드, 나머지는 그 위 누적.
+        bands.push({ label: MMM_BUCKET_META.base.label, absolute: baseData, tone: MMM_BUCKET_META.base.tone });
+        bands.push({ label: MMM_BUCKET_META.season.label, series: bucketSeries("season"), tone: MMM_BUCKET_META.season.tone });
+        bands.push({ label: MMM_BUCKET_META.event.label, series: bucketSeries("event"), tone: MMM_BUCKET_META.event.tone });
+        if (decompGrouped) {
+          bands.push({ label: MMM_BUCKET_META.media.label, series: bucketSeries("media"), tone: MMM_BUCKET_META.media.tone });
+        } else {
+          const mediaGroups = decomp.groupNames.filter((g) => decompBucketOf(g) === "media");
+          mediaGroups.forEach((g, i) => {
+            bands.push({ label: g, series: decomp.weeks.map((w) => w.contrib[g] || 0), tone: MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length] });
           });
+        }
+        // 누적 → 각 밴드의 상단 경계선. fill:"-1"(이전 밴드 상단)로 밴드 색 채움. 맨 아래는 origin.
+        const datasets = [];
+        let cum = baseData.map(() => 0);
+        bands.forEach((b, i) => {
+          cum = b.absolute ? b.absolute.slice() : cum.map((v, t) => v + (b.series[t] || 0));
+          datasets.push({
+            label: b.label,
+            data: cum.slice(),
+            backgroundColor: b.tone + "40",
+            borderColor: b.tone,
+            borderWidth: 1,
+            fill: i === 0 ? "origin" : "-1",
+            pointRadius: 0,
+            tension: 0.25,
+            order: 3,
+          });
+        });
+        // 최상단 = 모델(fitted), 그리고 실제(actual) — 스택 합이 모델과 일치함을 눈으로 확인.
+        datasets.push({
+          label: "모델(합계)",
+          data: decomp.weeks.map((w) => w.fitted),
+          borderColor: "#7aa2f7",
+          backgroundColor: "transparent",
+          fill: false,
+          pointRadius: 0,
+          borderWidth: 2,
+          order: 1,
         });
         datasets.push({
           label: "실제",
           data: decomp.weeks.map((w) => w.actual),
-          borderColor: "#fff",
+          borderColor: textCol,
           backgroundColor: "transparent",
+          borderDash: [4, 3],
           fill: false,
           pointRadius: 0,
           borderWidth: 1.5,
+          order: 0,
         });
-        // 회귀 변수(드라이버)가 많아 기본 상단 범례가 캔버스를 짓눌러 레이아웃 붕괴 →
-        // 범례 우측 이동 + 스크롤 가능, x축 autoSkip, 툴팁 천단위 콤마.
         const decompOpts = chartBase();
         decompOpts.plugins.legend = {
           position: "right",
           align: "start",
-          maxWidth: 160,
-          labels: { color: CHART_THEME.text, font: { size: 11 }, boxWidth: 12, boxHeight: 12, padding: 8, usePointStyle: true },
+          maxWidth: 170,
+          labels: { color: textCol, font: { size: 11 }, boxWidth: 12, boxHeight: 12, padding: 8, usePointStyle: true },
         };
         decompOpts.plugins.tooltip = {
           ...decompOpts.plugins.tooltip,
@@ -1058,10 +1098,11 @@ export default function MarketingResponse() {
             label: (ctx) => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y).toLocaleString()}명`,
           },
         };
-        decompOpts.scales.x.ticks = { ...decompOpts.scales.x.ticks, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 };
-        decompOpts.scales.y.ticks = { ...decompOpts.scales.y.ticks, callback: (v) => Math.round(v).toLocaleString() };
-        // 튀는 구간 메모를 입력하면 그 주에 세로 점선 + 라벨을 그려 위치를 바로 보이게 함(직접 그리는 인라인 플러그인).
+        decompOpts.scales.x.ticks = { ...decompOpts.scales.x.ticks, color: getCssVar("--text-muted") || CHART_THEME.muted, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 };
+        decompOpts.scales.y.ticks = { ...decompOpts.scales.y.ticks, color: getCssVar("--text-muted") || CHART_THEME.muted, callback: (v) => Math.round(v).toLocaleString() };
+        // 메모 남긴 튀는 주 → 세로 점선 + 번호 뱃지(글씨 겹침 방지, 실제 메모는 아래 표에 동일 번호로).
         const notedSpikes = (decomp.spikes || []).filter((s) => (spikeNotes[`${mmm.target}|${s.week}`] || "").trim());
+        const numOf = (s) => notedSpikes.findIndex((n) => n.week === s.week) + 1;
         const spikeLinePlugin = {
           id: "spikeLines",
           afterDraw(chart) {
@@ -1072,19 +1113,24 @@ export default function MarketingResponse() {
               const idx = s.i != null ? s.i : s.week - 1;
               const x = scales.x.getPixelForValue(idx);
               if (x < chartArea.left || x > chartArea.right) return;
-              ctx.strokeStyle = "#fbbf24";
+              ctx.strokeStyle = "#f59e0b";
               ctx.setLineDash([4, 3]);
               ctx.lineWidth = 1.5;
               ctx.beginPath();
-              ctx.moveTo(x, chartArea.top);
+              ctx.moveTo(x, chartArea.top + 12);
               ctx.lineTo(x, chartArea.bottom);
               ctx.stroke();
               ctx.setLineDash([]);
-              ctx.fillStyle = "#fbbf24";
-              ctx.font = "10px sans-serif";
+              // 번호 뱃지(원)
+              ctx.fillStyle = "#f59e0b";
+              ctx.beginPath();
+              ctx.arc(x, chartArea.top + 7, 8, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.fillStyle = "#fff";
+              ctx.font = "bold 10px sans-serif";
               ctx.textAlign = "center";
-              const note = spikeNotes[`${mmm.target}|${s.week}`] || "";
-              ctx.fillText(note.length > 16 ? note.slice(0, 16) + "…" : note, x, chartArea.top + 10);
+              ctx.textBaseline = "middle";
+              ctx.fillText(String(numOf(s)), x, chartArea.top + 7);
             });
             ctx.restore();
           },
@@ -1100,7 +1146,7 @@ export default function MarketingResponse() {
       }
     }
     return () => inst.forEach((c) => c && c.destroy());
-  }, [stage, mmm, decomp, spikeNotes]);
+  }, [stage, mmm, decomp, spikeNotes, decompGrouped]);
 
   // Stage ③ forecast chart
   useEffect(() => {
@@ -2003,6 +2049,22 @@ export default function MarketingResponse() {
               .map((s) => ({ ...s, curMarg: (s.ln_coef / (1 + (s.recentMean || 0))) * 1000 }))
               .filter((s) => s.ln_coef > 0 && s.curMarg > 0)
               .sort((a, b) => b.curMarg - a.curMarg);
+            // 음(−) 기여 알림 — 어떤 버킷이 특정 주에 성과를 크게 끌어내렸나. baseline(기본 수요)은 상수라 제외.
+            const negAlert = (() => {
+              if (!decomp || !decomp.weeks?.length) return null;
+              let worst = null;
+              decomp.weeks.forEach((w, i) => {
+                const byB = {};
+                decomp.groupNames.forEach((g) => { const b = decompBucketOf(g); byB[b] = (byB[b] || 0) + (w.contrib[g] || 0); });
+                Object.entries(byB).forEach(([b, v]) => { if (v < 0 && (!worst || v < worst.val)) worst = { bucket: b, val: v, i }; });
+              });
+              const thr = -0.08 * Math.abs(decomp.baseline || 1);
+              if (!worst || worst.val > thr) return null;
+              const w = decomp.weeks[worst.i];
+              let domG = null, domV = 0;
+              decomp.groupNames.forEach((g) => { if (decompBucketOf(g) !== worst.bucket) return; const v = w.contrib[g] || 0; if (v < domV) { domV = v; domG = g; } });
+              return { ...worst, domG, domV, lbl: mmm.panel.weekLabel?.[worst.i] || `주차 ${worst.i + 1}`, bLabel: MMM_BUCKET_META[worst.bucket]?.label || worst.bucket };
+            })();
             return (
             <>
               {/* ── 메인: 평어 헤드라인 ── */}
@@ -2015,15 +2077,16 @@ export default function MarketingResponse() {
               <section className="block">
                 <h2 className="section-title">무엇이 성과를 움직였나 <span style={{ fontSize: "12px", color: MUTED, fontWeight: 400 }}>· 설명력 비중</span></h2>
                 {shRows.length ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "6px" }}>
+                  // 단일 grid — 라벨 열 폭을 전 행 공유(max-content)해 가장 긴 변수명에 맞춰 정렬, 막대 시작점 일치.
+                  <div style={{ display: "grid", gridTemplateColumns: "max-content 1fr 44px", alignItems: "center", columnGap: "10px", rowGap: "8px", marginTop: "6px" }}>
                     {shRows.map((r) => (
-                      <div key={r.driver} style={{ display: "grid", gridTemplateColumns: "minmax(0,max-content) 1fr 44px", alignItems: "center", gap: "10px" }}>
+                      <React.Fragment key={r.driver}>
                         <span style={{ fontSize: "12.5px", textAlign: "left", color: "var(--text-1)", whiteSpace: "nowrap" }} title={r.driver}>{plainDrv(r.driver)}</span>
                         <div style={{ background: "var(--bg-1)", borderRadius: "6px", height: "20px", minWidth: 0 }}>
                           <div style={{ width: `${Math.round((r.pct || 0) / maxPct * 100)}%`, minWidth: "2px", background: barColor(r.driver), height: "100%", borderRadius: "6px" }}></div>
                         </div>
                         <span style={{ fontSize: "12.5px", fontWeight: 600, textAlign: "right" }}>{(r.pct || 0).toFixed(0)}%</span>
-                      </div>
+                      </React.Fragment>
                     ))}
                   </div>
                 ) : <p className="muted" style={{ fontSize: "12px" }}>계산할 수 없어요.</p>}
@@ -2066,7 +2129,27 @@ export default function MarketingResponse() {
                       </div>
                       <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>실제(회색)와 모델(파랑)이 가까울수록 잘 맞은 거예요. 점선(시즌·추세 등)은 광고와 무관한 부분만 뽑아낸 흐름이라 시간에 따라 움직여요 — &quot;전체 기간 평균&quot;(고정값)과는 다른 선입니다.</p>
                       <div className="chart-container" style={{ height: "240px", marginBottom: "12px" }}><canvas ref={fitRef}></canvas></div>
-                      <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>매주 성과를 기준선 위에 드라이버별로 쌓은 그래프예요 (범례는 우측).</p>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
+                        <h3 className="section-title" style={{ fontSize: "13.5px", margin: 0 }}>매주 성과는 무엇으로 이뤄졌나 <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>· 기준선 위로 쌓은 값</span></h3>
+                        <div className="ab-pillgroup">
+                          <button className={`ab-pill ${decompGrouped ? "active" : ""}`} onClick={() => setDecompGrouped(true)}>그룹으로 보기</button>
+                          <button className={`ab-pill ${!decompGrouped ? "active" : ""}`} onClick={() => setDecompGrouped(false)}>광고 채널 펼치기</button>
+                        </div>
+                      </div>
+                      <p className="muted" style={{ fontSize: "11px", marginBottom: "6px", lineHeight: 1.5 }}>
+                        아래에서부터 <b style={{ color: MMM_BUCKET_META.base.tone }}>기본 수요</b> → <b style={{ color: MMM_BUCKET_META.season.tone }}>시즌·추세</b> → <b style={{ color: MMM_BUCKET_META.event.tone }}>이벤트·구조변화</b> → <b style={{ color: MMM_BUCKET_META.media.tone }}>광고 효과</b> 순으로 쌓았어요.
+                        맨 위 <b style={{ color: "#7aa2f7" }}>모델(합계)</b> 선이 이 모든 값의 합이고, <b>실제</b>(점선)에 가까울수록 잘 맞은 거예요.
+                      </p>
+                      {negAlert && (
+                        <div style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "9px 12px", marginBottom: "8px", background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.4)", borderRadius: "8px" }}>
+                          <span style={{ fontSize: "15px" }}>⚠️</span>
+                          <span style={{ fontSize: "12px", color: "var(--text-1)", lineHeight: 1.5 }}>
+                            <b>{String(negAlert.lbl)}</b> 주에 <b style={{ color: MMM_BUCKET_META[negAlert.bucket]?.tone }}>{negAlert.bLabel}</b>가 성과를 크게 끌어내렸어요 (약 {fmtInt(negAlert.val)}명).
+                            {negAlert.domG && negAlert.domV < 0 ? <> 주 원인은 <b>{plainDrv(negAlert.domG)}</b>({fmtInt(negAlert.domV)}명)예요.</> : null}
+                            {negAlert.bucket === "media" ? " 광고가 오히려 마이너스로 잡히면 노이즈·공선일 수 있으니 아래 상세를 확인하세요." : ""}
+                          </span>
+                        </div>
+                      )}
                       <div className="chart-container" style={{ height: "440px", minHeight: "440px" }}><canvas ref={decompRef}></canvas></div>
                       <div className="table-wrap" style={{ marginTop: "12px" }}>
                         <table className="data" style={{ fontSize: "11.5px" }}>
@@ -2084,14 +2167,15 @@ export default function MarketingResponse() {
                       </div>
                       {decomp.spikes && decomp.spikes.length > 0 && (
                         <>
-                          <h3 className="section-title" style={{ fontSize: "13.5px", marginTop: "16px" }}>🔎 튀는 구간 (평소와 다르게 크게 벗어난 주)</h3>
+                          <h3 className="section-title" style={{ fontSize: "13.5px", marginTop: "16px" }}>🔎 튀는 구간 <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>· 평소와 다르게 크게 벗어난 주 (메모 남기면 위 그래프에 번호로 표시)</span></h3>
                           <div className="table-wrap">
                             <table className="data" style={{ fontSize: "11.5px" }}>
-                              <thead><tr><th>주</th><th>기준선 대비</th><th>자동 진단</th><th>메모 (원인 기록)</th></tr></thead>
+                              <thead><tr><th>기간</th><th>기준선 대비</th><th>자동 진단</th><th>메모 (원인 기록)</th></tr></thead>
                               <tbody>
                                 {decomp.spikes.map((s) => {
                                   const lbl = mmm.panel.weekLabel && s.i != null ? mmm.panel.weekLabel[s.i] : null;
                                   const noteKey = `${mmm.target}|${s.week}`;
+                                  const noteNum = decomp.spikes.filter((n) => (spikeNotes[`${mmm.target}|${n.week}`] || "").trim()).findIndex((n) => n.week === s.week) + 1;
                                   const clsLabel = s.cls === "channel"
                                     ? { txt: "채널 스파크", color: "#7aa2f7" }
                                     : s.cls === "baseline"
@@ -2102,7 +2186,13 @@ export default function MarketingResponse() {
                                     : `${s.domDriver} ${s.domVal >= 0 ? "+" : ""}${s.domVal.toLocaleString()}명`;
                                   return (
                                     <tr key={s.week}>
-                                      <td className="tnum">t{s.i != null ? s.i + 1 : s.week}{lbl != null && <span style={{ fontSize: "9px", color: MUTED }}><br />{String(lbl)}</span>}</td>
+                                      <td>
+                                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                                          {noteNum > 0 && <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "50%", background: "#f59e0b", color: "#fff", fontSize: "9px", fontWeight: 700, flexShrink: 0 }}>{noteNum}</span>}
+                                          <b style={{ fontSize: "12px" }}>{lbl != null ? String(lbl) : `주차 ${s.i != null ? s.i + 1 : s.week}`}</b>
+                                        </span>
+                                        {lbl != null && <span style={{ fontSize: "9px", color: MUTED, display: "block" }}>주차 {s.i != null ? s.i + 1 : s.week}</span>}
+                                      </td>
                                       <td className="tnum" style={{ color: s.dev >= 0 ? POS : NEG }}>{s.dev >= 0 ? "+" : ""}{s.dev.toLocaleString()}명</td>
                                       <td>
                                         <span style={{ color: clsLabel.color, fontWeight: 600 }}>{clsLabel.txt}</span>
@@ -2133,15 +2223,15 @@ export default function MarketingResponse() {
 
               {/* ── 아코디언 B: 이 숫자들은 어떻게 나왔나요? (adstock CV·탄력성·VIF·Shapley·수확체감·채널효과) ── */}
               <details className="block" onToggle={onAccordionToggle}>
-                <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>이 숫자들은 어떻게 나왔나요? — 광고 잔효(adstock)·수확체감·기여도 계산 (통계 상세)</summary>
+                <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>이 숫자들은 어떻게 나왔나요? — 계산 과정 자세히 보기</summary>
                 <div style={{ marginTop: "12px" }}>
                   <div className="alloc-card" style={{ marginBottom: "8px" }}>
-                    <p style={{ fontSize: "12px", color: MUTED, margin: 0 }}>
-                      adstock λ는 rolling-origin OOS CV로 선택(in-sample 아님) → <strong>best λ={mmm.run.best_lambda}</strong>
-                      {mmm.run.collinear_pairs?.length ? ` · 공선쌍(|r|≥0.85): ${mmm.run.collinear_pairs.map((p) => `${p.a}~${p.b}(${p.corr})`).join(", ")}` : " · 공선쌍: 없음"}
+                    <p style={{ fontSize: "12px", color: MUTED, margin: 0, lineHeight: 1.55 }}>
+                      광고는 집행 후에도 며칠~몇 주 여운이 남아요. 그 여운의 길이를 <strong>과거에 안 본 기간으로 검증(OOS 교차검증)</strong>해서 가장 잘 맞는 값을 골랐어요 → <strong>여운 강도 λ={mmm.run.best_lambda}</strong>
+                      {mmm.run.collinear_pairs?.length ? ` · 서로 너무 비슷하게 움직인 채널쌍: ${mmm.run.collinear_pairs.map((p) => `${p.a}~${p.b}(${p.corr})`).join(", ")} (구분이 어려워요)` : " · 서로 겹치는 채널: 없음"}
                     </p>
                   </div>
-                  <p style={{ fontSize: "12px", margin: "0 0 4px" }}>광고 잔효(adstock) λ 선택 — OOS 오차가 가장 작은 값</p>
+                  <p style={{ fontSize: "12px", margin: "0 0 4px" }}>광고 여운 강도(adstock λ) 고르기 — 안 본 기간 오차가 가장 작은 값</p>
                   <div className="chart-container" style={{ height: "200px", marginBottom: "12px" }}><canvas ref={cvRef}></canvas></div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
                     <div>
