@@ -161,6 +161,16 @@ function Card({ children, style }) {
   );
 }
 
+// 통계 상세(아코디언 B) 소제목 — 좌측 액센트 바 + 볼드 + 평어 한 줄로 섹션 구분.
+function StatHead({ title, hint }) {
+  return (
+    <div style={{ margin: "18px 0 8px", borderLeft: "3px solid var(--primary, #adc6ff)", paddingLeft: "10px" }}>
+      <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text-1)" }}>{title}</div>
+      {hint ? <div style={{ fontSize: "11px", color: MUTED, marginTop: "3px", lineHeight: 1.55 }}>{hint}</div> : null}
+    </div>
+  );
+}
+
 function fmtInt(v) {
   if (v == null || !isFinite(v)) return "—";
   return Math.round(v).toLocaleString();
@@ -683,6 +693,7 @@ export default function MarketingResponse() {
   const [target, setTarget] = useState("Regs");
   const [decompModel, setDecompModel] = useState("ols"); // ols | ridge (merge/ridge 토글)
   const [decompGrouped, setDecompGrouped] = useState(true); // §5.5 true=4버킷 묶음 / false=광고 개별채널
+  const [satHidden, setSatHidden] = useState({}); // 수확체감 곡선 채널별 표시 토글 { [chKey]: true=숨김 }
   const [spikeNotes, setSpikeNotes] = useState({}); // §5.5 튀는 구간 메모 { [target|week]: note }
   const [fcHorizon, setFcHorizon] = useState(13);
   const [fcBand, setFcBand] = useState("mean"); // mean | pred
@@ -983,38 +994,37 @@ export default function MarketingResponse() {
           const maxSpend = Math.max(...chs.map(([, s]) => s.recentMean || 0)) * 1.6 || 40000;
           const grid = Array.from({ length: 41 }, (_, i) => (i / 40) * maxSpend);
           const respAt = (s, x) => s.ln_coef * Math.log(1 + x);
-          const lineDs = chs.map(([, s], i) => ({
-            type: "line",
-            label: s.label,
-            data: grid.map((x) => ({ x, y: respAt(s, x) })),
-            borderColor: MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length],
-            borderDash: s.ln_coef < 0 ? [5, 4] : [],
-            borderWidth: 1.75,
-            pointRadius: 0,
-            tension: 0.3,
-          }));
-          // 현재 지출 위치(각 채널 recentMean) — 곡선 위 어디에 있는지 한눈에.
-          const curPts = chs
-            .map(([, s], i) => ({ x: s.recentMean, y: respAt(s, s.recentMean), _c: MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length] }))
-            .filter((p) => p.x > 0);
-          const curDs = {
-            type: "scatter",
-            label: "현재 지출 위치",
-            data: curPts,
-            pointStyle: "circle",
-            pointRadius: 4,
-            pointBorderColor: textColS,
-            pointBorderWidth: 1.5,
-            pointBackgroundColor: (ctx) => ctx.raw?._c || textColS,
-          };
+          // 현재 지출 위치(●)는 각 채널 선 위 데이터점으로 → 선을 숨기면 점도 같이 숨겨짐(별도 scatter 제거).
+          const lineDs = chs.map(([key, s], i) => {
+            const col = MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length];
+            let curIdx = -1;
+            if (s.recentMean > 0) {
+              let best = Infinity;
+              grid.forEach((x, gi) => { const d = Math.abs(x - s.recentMean); if (d < best) { best = d; curIdx = gi; } });
+            }
+            return {
+              type: "line",
+              label: s.label,
+              data: grid.map((x) => ({ x, y: respAt(s, x) })),
+              borderColor: col,
+              borderDash: s.ln_coef < 0 ? [5, 4] : [],
+              borderWidth: 1.75,
+              tension: 0.3,
+              pointRadius: grid.map((_, gi) => (gi === curIdx ? 4.5 : 0)),
+              pointBackgroundColor: col,
+              pointBorderColor: textColS,
+              pointBorderWidth: 1.5,
+              hidden: !!satHidden[key],
+            };
+          });
           const satOpts = chartBase();
-          satOpts.plugins.legend = { position: "bottom", labels: { color: textColS, font: { size: 10 }, boxWidth: 10, boxHeight: 10, padding: 8, usePointStyle: true } };
+          satOpts.plugins.legend = { display: false }; // 커스텀 HTML 범례(채널 토글) 사용
           satOpts.plugins.tooltip = { ...satOpts.plugins.tooltip, callbacks: { label: (c) => `${c.dataset.label}: ${Math.round(c.parsed.y).toLocaleString()}명 @ $${Math.round(c.parsed.x / 1000)}k` } };
           satOpts.scales.x = { type: "linear", ticks: { color: mutedColS, font: { size: 10 }, callback: (v) => "$" + Math.round(v / 1000) + "k" }, grid: { display: false } };
           satOpts.scales.y = { ticks: { color: mutedColS, font: { size: 10 }, callback: (v) => Math.round(v).toLocaleString() }, grid: { color: CHART_THEME.grid } };
           inst.push(
             new Chart(satRef.current.getContext("2d"), {
-              data: { datasets: [...lineDs, curDs] },
+              data: { datasets: lineDs },
               options: satOpts,
             }),
           );
@@ -1154,7 +1164,7 @@ export default function MarketingResponse() {
       }
     }
     return () => inst.forEach((c) => c && c.destroy());
-  }, [stage, mmm, decomp, spikeNotes, decompGrouped]);
+  }, [stage, mmm, decomp, spikeNotes, decompGrouped, satHidden]);
 
   // Stage ③ forecast chart
   useEffect(() => {
@@ -2233,17 +2243,18 @@ export default function MarketingResponse() {
               <details className="block" onToggle={onAccordionToggle}>
                 <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>이 숫자들은 어떻게 나왔나요? — 계산 과정 자세히 보기</summary>
                 <div style={{ marginTop: "12px" }}>
+                  <StatHead title="① 광고 여운 강도 정하기" hint="광고는 집행 후에도 며칠~몇 주 효과가 남아요(여운). 과거에 안 본 기간에 맞춰보며 여운 길이를 골랐어요 — 아래 그래프에서 오차가 가장 낮은 지점이 선택된 값이에요." />
                   <div className="alloc-card" style={{ marginBottom: "8px" }}>
                     <p style={{ fontSize: "12px", color: MUTED, margin: 0, lineHeight: 1.55 }}>
-                      광고는 집행 후에도 며칠~몇 주 여운이 남아요. 그 여운의 길이를 <strong>과거에 안 본 기간으로 검증(OOS 교차검증)</strong>해서 가장 잘 맞는 값을 골랐어요 → <strong>여운 강도 λ={mmm.run.best_lambda}</strong>
-                      {mmm.run.collinear_pairs?.length ? ` · 서로 너무 비슷하게 움직인 채널쌍: ${mmm.run.collinear_pairs.map((p) => `${p.a}~${p.b}(${p.corr})`).join(", ")} (구분이 어려워요)` : " · 서로 겹치는 채널: 없음"}
+                      선택된 <strong>여운 강도 λ={mmm.run.best_lambda}</strong>
+                      {mmm.run.collinear_pairs?.length ? ` · 서로 너무 비슷하게 움직인 채널쌍: ${mmm.run.collinear_pairs.map((p) => `${p.a}~${p.b}(${p.corr})`).join(", ")} (효과를 따로 떼기 어려워요)` : " · 서로 겹치는 채널: 없음"}
                     </p>
                   </div>
-                  <p style={{ fontSize: "12px", margin: "0 0 4px" }}>광고 여운 강도(adstock λ) 고르기 — 안 본 기간 오차가 가장 작은 값</p>
                   <div className="chart-container" style={{ height: "200px", marginBottom: "12px" }}><canvas ref={cvRef}></canvas></div>
+                  <StatHead title="② 채널별 영향력과 겹침" hint="왼쪽 = 지출을 1% 늘릴 때 성과가 몇 % 움직이나(영향력). CI에 0이 안 걸리면 통계적으로 확실. 오른쪽 = 채널끼리 너무 비슷하게 움직여 효과를 나누기 어려운 정도(겹침)." />
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
                     <div>
-                      <p style={{ fontSize: "12px", margin: "0 0 4px" }}>탄력성 <span style={{ color: MUTED, fontSize: "11px" }}>(지출 1%↑당 성과 %↑)</span></p>
+                      <p style={{ fontSize: "12px", margin: "0 0 4px" }}>채널별 영향력 <span style={{ color: MUTED, fontSize: "11px" }}>(탄력성 — 지출 1%↑당 성과 %↑)</span></p>
                       <div className="table-wrap">
                         <table className="data" style={{ fontSize: "11px" }}>
                           <thead><tr><th>변수</th><th>coef</th><th>95% CI</th><th>p</th><th>유의</th></tr></thead>
@@ -2265,7 +2276,7 @@ export default function MarketingResponse() {
                       </div>
                     </div>
                     <div>
-                      <p style={{ fontSize: "12px", margin: "0 0 4px" }}>VIF <span style={{ color: MUTED, fontSize: "11px" }}>(&gt;{mmm.cfg.vifThreshold}=채널끼리 겹침)</span></p>
+                      <p style={{ fontSize: "12px", margin: "0 0 4px" }}>채널 간 겹침 <span style={{ color: MUTED, fontSize: "11px" }}>(VIF &gt;{mmm.cfg.vifThreshold}=겹침 큼)</span></p>
                       <div className="table-wrap">
                         <table className="data" style={{ fontSize: "11px" }}>
                           <thead><tr><th>변수</th><th>VIF</th></tr></thead>
@@ -2281,10 +2292,23 @@ export default function MarketingResponse() {
                       </div>
                     </div>
                   </div>
-                  <p style={{ fontSize: "12px", margin: "10px 0 4px" }}>설명력 비중 (Shapley R²) · total R²={mmm.run.shapley?.total ?? "—"}</p>
+                  <StatHead title="③ 무엇이 성과를 설명했나" hint={`지난 성과의 등락(변동)을 각 항목이 몇 %씩 설명하는지 공정하게 나눈 몫이에요(합 = 전체 설명력 R²=${mmm.run.shapley?.total ?? "—"}).`} />
                   <div className="chart-container" style={{ height: "200px", marginBottom: "8px" }}><canvas ref={shapleyRef}></canvas></div>
-                  <p style={{ fontSize: "12px", margin: "10px 0 2px" }}>수확체감 반응 곡선 — 지출을 늘릴수록 기여가 어떻게 늘고 꺾이나</p>
-                  <p className="muted" style={{ fontSize: "10.5px", margin: "0 0 4px" }}>곡선이 <b>평평해질수록 수확체감</b>(1달러당 효과 감소). ● = 현재 지출 위치 — 곡선이 이미 꺾인 뒤면 증액 효율 낮음. 점선 = 음수(노이즈).</p>
+                  <StatHead title="④ 수확체감 — 더 쓰면 효과가 얼마나 꺾이나" hint="곡선이 평평해질수록 1달러당 효과가 줄어요(수확체감). ● = 지금 지출 위치. 이미 꺾인 뒤에 있으면 증액 효율이 낮다는 뜻. 점선 = 음수(노이즈)." />
+                  {/* 커스텀 채널 토글 범례 — 클릭으로 곡선+현재지출점 함께 표시/숨김(§유저: 켠 채널 점만) */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+                    {Object.entries(mmm.run.saturationByChannel || {}).map(([key, s], i) => {
+                      const col = MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length];
+                      const off = !!satHidden[key];
+                      return (
+                        <button key={key} onClick={() => setSatHidden((h) => ({ ...h, [key]: !h[key] }))}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "3px 9px", borderRadius: "6px", border: "1px solid var(--border)", background: off ? "transparent" : "var(--bg-1)", color: off ? MUTED : "var(--text-1)", fontSize: "10.5px", cursor: "pointer", opacity: off ? 0.5 : 1, textDecoration: off ? "line-through" : "none" }}>
+                          <span style={{ width: "9px", height: "9px", borderRadius: "2px", background: s.ln_coef < 0 ? "transparent" : col, outline: s.ln_coef < 0 ? `1px dashed ${col}` : "none", display: "inline-block" }}></span>
+                          {s.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: "10px", alignItems: "start" }}>
                     <div className="chart-container" style={{ height: "280px", minHeight: "280px" }}><canvas ref={satRef}></canvas></div>
                     <div>
