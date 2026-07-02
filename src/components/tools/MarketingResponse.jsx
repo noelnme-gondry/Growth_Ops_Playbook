@@ -27,7 +27,6 @@ import { mmmOls } from "@/utils/regMath";
 import {
   mmmBuildCannibRank,
   mmmCannibLevel,
-  mmmCannibAction,
   mmmCannibActionShort,
   mmmGlobalCannib,
   mmmRankCfg,
@@ -485,9 +484,9 @@ function buildCannibSeriesCsv(panel, target) {
 
 // index.html MMM_STAGE_DEFS 이식 — 3단계 카드 탭(진단/기여/회귀·예측). 구 forecast(TF)는 lab에 흡수.
 const MMM_STAGE_DEFS = [
-  { id: "diagnose", no: "① 카니발", title: "카니발 진단", icon: "🔬", desc: "어느 채널이 오가닉을 잠식하나 / 추세 하락에 뭐가 영향 주나. 제거법 + 시차(lead/lag)." },
-  { id: "mmm", no: "② 기여", title: "MMM 기여 분해", icon: "🧩", desc: "각 채널·이벤트가 매주 얼마 기여하나(decomp) + 채널별 효과. adstock·수확체감." },
-  { id: "lab", no: "③ 회귀·예측", title: "회귀 · 미래 예측", icon: "📈", desc: "임의 CSV OLS(Cost·임의 변수 자유 매핑) — 계수·실제vs예측·기여도 + 미래 시나리오 예측(95% 밴드)·OS별 분리. MMM 데이터도 바로 불러오기." },
+  { id: "diagnose", no: "① 잠식 진단", title: "카니발 진단", icon: "🔬", desc: "유료 광고가 공짜로 들어올 오가닉 유입을 갉아먹고 있나? — 채널별로 점검합니다." },
+  { id: "mmm", no: "② 기여 분해", title: "MMM 기여 분해", icon: "🧩", desc: "무엇이 우리 성과를 실제로 움직였나? 다음 예산은 어디에 써야 하나?" },
+  { id: "lab", no: "③ 미래 예측", title: "회귀 · 미래 예측", icon: "📈", desc: "이대로 가면, 또는 예산을 바꾸면 다음 몇 주 성과는 어떻게 될까?" },
 ];
 
 // 차트 테마·공통 옵션 — 컴포넌트 밖(상수)로 두어 effect 의존성 안정화
@@ -1430,152 +1429,69 @@ export default function MarketingResponse() {
           {/* ── STAGE ① DIAGNOSE (MMM panel) ── */}
           {stage === "diagnose" && (
             <>
-              {/* ── 메인 뷰: 짧은 평어 결론만 (Card + Badge) — 통계 근거는 아래 아코디언 ── */}
-              {cannib && cannib.globalCannib && (() => {
-                const g = cannib.globalCannib;
-                const vc = g.verdict_class;
-                const tone = vc === "cannibal" ? "danger" : vc === "ok" ? "ok" : "warn";
-                const badgeTxt = vc === "cannibal" ? "잠식 의심" : vc === "ok" ? "방어 양호" : "판단 보류";
-                const plainTxt = vc === "cannibal"
-                  ? "현재 일부 채널에서 잠식이 의심됩니다."
-                  : vc === "ok"
-                    ? "현재 방어 양호합니다."
-                    : "판단하기엔 데이터·근거가 부족합니다.";
-                return (
-                  <Card style={{ marginBottom: "14px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-                    <Badge tone={tone}>{badgeTxt}</Badge>
-                    <span style={{ fontSize: "13.5px", fontWeight: 600, color: "var(--text-1)" }}>{plainTxt}</span>
-                    <span style={{ fontSize: "11px", color: MUTED, marginLeft: "auto" }}>자세한 근거는 아래 펼치기 ↓</span>
-                  </Card>
-                );
-              })()}
-
-              {/* ── 통계 상세는 전부 아코디언으로 격리(기본 접힘) — 근거·검정 원하는 사람만 펼침 ── */}
-              <details className="block" style={{ marginBottom: "14px" }}>
-                <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>
-                  [cannibalization이란 무엇이고, 이 도구에서 말하는 분석들은 무엇인가요?]
-                </summary>
-                <div style={{ marginTop: "12px" }}>
-                  <p className="muted" style={{ fontSize: "12px", lineHeight: 1.7, marginBottom: "14px" }}>
-                    <strong>카니발리제이션(잠식)</strong>이란 유료 광고가 원래 공짜로 들어올 오가닉 유입을 빼앗는 현상입니다. 이 도구는 4가지 독립 신호(①시간 선행성 ②탈추세·차분 상관 ③순증분 탄력성 ④그랜저 인과)를 투표로 종합해 채널별로 &quot;방어 양호 / 잠식 의심 / 판단 보류&quot;를 판정합니다. 관측 검정은 용의자를 좁힐 뿐이며, 확정은 홀드아웃 실험(5-4)에서만 가능합니다.
-                  </p>
-
-              {/* ── §4.5 카니발 의심 랭킹 (CEI · 적격 · 5단계 버킷) ── */}
+              {/* ── 메인: 판정별 3버킷 칸반(그룹핑) + 짧은 평어 헤드라인 ── 통계는 아래 아코디언 ── */}
               {cannib && cannib.cannibRank && cannib.cannibRank.length ? (() => {
                 const rk = cannib.cannibRank;
-                const levOf = {};
-                rk.forEach((r) => { levOf[r.key] = mmmCannibLevel(r); });
-                const maxCei = Math.max(0.0001, ...rk.filter((r) => r.eligible).map((r) => r.cei));
-                // 5단계 버킷 카운트(빠른 스캔)
-                const bucketCounts = [0, 0, 0, 0, 0];
-                rk.forEach((r) => { bucketCounts[levOf[r.key].lv - 1]++; });
-                const bucketMeta = [
-                  { lv: 1, label: "데이터 없음", color: "#9CA3AF", sym: "⊘" },
-                  { lv: 2, label: "신호 없음", color: "#22c55e", sym: "●" },
-                  { lv: 3, label: "거의 없음", color: "#2dd4bf", sym: "◐" },
-                  { lv: 4, label: "신호 조금", color: "#fbbf24", sym: "◑" },
-                  { lv: 5, label: "카니발", color: "#f87171", sym: "●" },
-                ];
-                return (
-                  <section className="block" id="s-cannib">
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
-                      <h2 className="section-title" style={{ margin: 0 }}>§4.5 카니발 의심 랭킹 — CEI 높을수록 우선 검토</h2>
-                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                        <button
-                          className="ab-pill"
-                          title="모든 채널 × 3-state 투표(FOR/AGAINST/ABSTAIN) + 게이트·탄력성·커버리지·그랜저 1행씩 → CSV"
-                          onClick={() =>
-                            cannib &&
-                            csvDownload(
-                              `mmm_cannib_${mmm.target}_${_today()}.csv`,
-                              buildCannibCsv(cannib, mmm.effects, mmm.target),
-                            )
-                          }
-                        >
-                          ⬇ 채널별 카니발 CSV
-                        </button>
-                        <button
-                          className="ab-pill"
-                          title="§4 검정 원자료 — 주별 타깃·채널별 ln(1+지출)·탈추세 잔차·1차차분. 엑셀 CORREL로 화면 상관 재현"
-                          onClick={() =>
-                            csvDownload(
-                              `mmm_cannib_series_${mmm.target}_${_today()}.csv`,
-                              buildCannibSeriesCsv(mmm.panel, mmm.target),
-                            )
-                          }
-                        >
-                          ⬇ 검정 원자료 CSV
-                        </button>
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "10px", marginBottom: "10px" }}>
-                      {bucketMeta.map((b) => (
-                        <div key={b.lv} className="stat-card" style={{ minWidth: "80px" }}>
-                          <div className="lbl" style={{ color: b.color }}>{b.sym} {b.label}</div>
-                          <div className="val">{bucketCounts[b.lv - 1]}</div>
+                // 엔진 5단계(lv) → 마케터용 3버킷: 잠식의심 / 애매함(데이터부족·공선) / 문제없음.
+                const bucketOf = (r) => {
+                  const L = mmmCannibLevel(r);
+                  if (!r.eligible || L.lv === 1) return "unclear";
+                  if (L.lv >= 4) return "danger"; // 카니발 + 신호 조금 → 점검 대상
+                  return "ok"; // 신호 없음 / 거의 없음
+                };
+                const buckets = { danger: [], unclear: [], ok: [] };
+                rk.forEach((r) => buckets[bucketOf(r)].push(r));
+                const nD = buckets.danger.length;
+                const headTone = nD > 0 ? "danger" : buckets.ok.length > 0 ? "ok" : "warn";
+                const headBadge = nD > 0 ? "잠식 의심" : buckets.ok.length > 0 ? "방어 양호" : "판단 보류";
+                const headline = nD > 0
+                  ? `${rk.length}개 채널 중 ${nD}개에서 잠식이 의심돼요 — 빨간 칸부터 점검하세요.`
+                  : buckets.ok.length > 0
+                    ? `${rk.length}개 채널 대체로 방어 양호 — 지금 뚜렷한 잠식 신호는 없어요.`
+                    : `판정할 만큼 데이터가 충분한 채널이 적어요 — 애매함 칸을 확인하세요.`;
+                const col = (key, title, icon, tone) => {
+                  const list = buckets[key];
+                  const c = BADGE_TONE[tone];
+                  return (
+                    <div style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: "12px", padding: "10px 12px" }}>
+                      <div style={{ fontSize: "13px", fontWeight: 700, color: c.color, marginBottom: "8px" }}>{icon} {title} · {list.length}</div>
+                      {list.length ? list.map((r) => (
+                        <div key={r.key} onClick={() => setCannibChannel(r.key)}
+                          style={{ background: "var(--bg-2)", border: `1px solid ${r.key === activeCannibCh ? "rgba(122,162,247,0.55)" : "var(--border)"}`, borderRadius: "8px", padding: "8px 10px", marginBottom: "6px", cursor: "pointer" }}>
+                          <div style={{ fontSize: "13px", fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span>{r.label}{r.brand ? " 🏷" : ""}</span>
+                            <span style={{ fontSize: "11px", color: MUTED }}>›</span>
+                          </div>
+                          <div style={{ fontSize: "11px", color: MUTED, marginTop: "2px" }}>
+                            {key === "unclear"
+                              ? (r.eligible ? "채널끼리 지출이 겹침(공선)" : `데이터 부족 (${r.nActive}/${r.total}주)`)
+                              : mmmCannibActionShort(r)}
+                          </div>
                         </div>
-                      ))}
+                      )) : <div style={{ fontSize: "11px", color: MUTED }}>없음</div>}
                     </div>
-                    <div className="ab-pillgroup" style={{ marginBottom: "10px" }}>
-                      <span className="ab-pillgroup-label">채널(상세로 이동)</span>
-                      {cannib.rows.map((r) => (
-                        <button key={r.channel.key} className={`ab-pill ${r.channel.key === activeCannibCh ? "active" : ""}`} onClick={() => setCannibChannel(r.channel.key)}>
-                          {r.channel.label}
-                        </button>
-                      ))}
+                  );
+                };
+                return (
+                  <>
+                    <Card style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                      <Badge tone={headTone}>{headBadge}</Badge>
+                      <span style={{ fontSize: "13.5px", fontWeight: 600, color: "var(--text-1)" }}>{headline}</span>
+                    </Card>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "10px", marginBottom: "10px" }}>
+                      {col("danger", "잠식 의심", "⚠", "danger")}
+                      {col("unclear", "애매함", "?", "neutral")}
+                      {col("ok", "문제 없음", "✓", "ok")}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "10px" }}>
-                      {rk.map((r) => {
-                        const L = levOf[r.key];
-                        const w = Math.round(Math.min(1, r.cei / maxCei) * 100);
-                        const tone = L.lv >= 5 ? "danger" : L.lv === 4 ? "warn" : L.lv <= 1 ? "neutral" : "ok";
-                        return (
-                          <Card
-                            key={r.key}
-                            style={{
-                              cursor: "pointer",
-                              borderColor: r.key === activeCannibCh ? "rgba(122,162,247,0.55)" : "var(--border)",
-                              background: r.key === activeCannibCh ? "rgba(122,162,247,0.06)" : "var(--bg-2)",
-                            }}
-                          >
-                            <div onClick={() => setCannibChannel(r.key)}>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
-                                <strong style={{ fontSize: "13px" }}>#{r.rank} {r.label}{r.brand ? " 🏷" : ""}{r.flighted ? " ⚡" : ""}</strong>
-                                <Badge tone={tone} color={L.color}>{L.sym} {L.short}</Badge>
-                              </div>
-                              <div style={{ fontSize: "10.5px", color: MUTED, marginTop: "6px" }}>근거강도 {r.badge}</div>
-                              {r.eligible ? (
-                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px" }}>
-                                  <div style={{ width: "50px", height: "6px", background: "var(--bg-1)", borderRadius: "3px", overflow: "hidden" }}>
-                                    <div style={{ width: `${w}%`, height: "100%", background: r.cei > 0 ? "#f87171" : "var(--text-muted)" }}></div>
-                                  </div>
-                                  <span className="tnum" style={{ fontSize: "10px", color: MUTED }}>CEI {r.cei.toFixed(2)}</span>
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: "10px", color: MUTED, marginTop: "6px" }}>부족({r.nActive}/{r.total}주)</div>
-                              )}
-                              <div style={{ fontSize: "10px", color: MUTED, marginTop: "4px" }}>
-                                탈추세 r={isFinite(r.rDet) ? r.rDet.toFixed(2) : "—"}·p={r.detP} · net={isFinite(r.netElast) ? r.netElast : "—"}{r.netCiLo != null ? ` [${r.netCiLo},${r.netCiHi}]` : ""}
-                              </div>
-                              <div style={{ fontSize: "10.5px", color: "var(--text-1)", marginTop: "6px", fontWeight: 600 }} title={mmmCannibAction(r)}>
-                                {r.eligible ? (r.gated ? "🔒 공선" : "적격") : ""} {mmmCannibActionShort(r)}
-                              </div>
-                            </div>
-                          </Card>
-                        );
-                      })}
-                    </div>
-                    <p style={{ fontSize: "10.5px", color: MUTED, marginTop: "8px", lineHeight: 1.6 }}>
-                      행 클릭 → 아래 §4 채널 상세로 이동. <strong>CEI</strong>(카니발 근거지수) = 탈추세·차분·net이 <strong>유의하게 음(잠식)</strong>일 때만 가산 → 높을수록 의심 큼. 판정 5단계: ⊘데이터없음 · ●신호없음 · ◐거의없음 · ◑신호조금 · ●카니발.
-                      {rk.mde12 != null ? ` · 12주 holdout coarse MDE ≈ ${rk.mde12}%.` : ""}
+                    <p style={{ fontSize: "11px", color: MUTED, marginBottom: "14px" }}>
+                      채널을 클릭하면 아래에 왜 그렇게 판정했는지(근거)가 열려요.{rk.mde12 != null ? ` · 12주 실험 최소검출력 ≈ ${rk.mde12}%` : ""}
                     </p>
-                  </section>
+                  </>
                 );
               })() : (
-                <section className="block" id="s-cannib">
-                  <h2 className="section-title">§4.5 카니발 의심 랭킹</h2>
-                  <p className="muted" style={{ fontSize: "12px" }}>카니발 랭킹을 계산할 수 없습니다.</p>
-                </section>
+                <Card style={{ marginBottom: "14px" }}>
+                  <span style={{ fontSize: "13px", color: MUTED }}>카니발 판정을 계산할 수 없습니다 (데이터·매핑 확인).</span>
+                </Card>
               )}
 
               {/* ── §4 채널 상세 — 왜 이 판정인지 (①~⑤ 삼각검증) ── */}
@@ -1670,6 +1586,26 @@ export default function MarketingResponse() {
                   </section>
                 );
               })()}
+
+              {/* ── 통계 근거·방법론 전부 여기로 격리(기본 접힘) — 비전문 유저는 위 칸반·평어만 보면 됨 ── */}
+              <details className="block" style={{ marginBottom: "14px" }}>
+                <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>
+                  카니발이 뭐고, 이 판정은 어떻게 나온 건가요? — 추세·데이터 위생·단순모델 점검 (통계 상세)
+                </summary>
+                <div style={{ marginTop: "12px" }}>
+                  <p className="muted" style={{ fontSize: "12px", lineHeight: 1.7, marginBottom: "10px" }}>
+                    <strong>카니발리제이션(잠식)</strong>이란 유료 광고가 원래 공짜로 들어올 오가닉 유입을 빼앗는 현상입니다. 이 도구는 4가지 독립 신호(①시간 선행성 ②탈추세·차분 상관 ③순증분 탄력성 ④그랜저 인과)를 투표로 종합해 채널별로 판정합니다. 관측 검정은 용의자를 좁힐 뿐이며, 확정은 홀드아웃 실험(5-4)에서만 가능합니다.
+                  </p>
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "14px" }}>
+                    <button className="ab-pill" title="채널 × 3-state 투표 + 게이트·탄력성·커버리지·그랜저 → CSV"
+                      onClick={() => cannib && csvDownload(`mmm_cannib_${mmm.target}_${_today()}.csv`, buildCannibCsv(cannib, mmm.effects, mmm.target))}>
+                      ⬇ 채널별 카니발 CSV
+                    </button>
+                    <button className="ab-pill" title="주별 타깃·채널별 ln(1+지출)·탈추세 잔차·1차차분 원자료"
+                      onClick={() => csvDownload(`mmm_cannib_series_${mmm.target}_${_today()}.csv`, buildCannibSeriesCsv(mmm.panel, mmm.target))}>
+                      ⬇ 검정 원자료 CSV
+                    </button>
+                  </div>
 
               <section className="block" id="s-trend">
                 <h2 className="section-title">추세 존재성 — {mmm.target}</h2>
