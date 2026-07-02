@@ -1494,94 +1494,85 @@ export default function MarketingResponse() {
                 </Card>
               )}
 
-              {/* ── §4 채널 상세 — 왜 이 판정인지 (①~⑤ 삼각검증) ── */}
+              {/* ── 채널 드릴다운: 4가지를 평어 질문으로, ①②③ 3열 균등, 헤드라인은 버킷과 일치 ── */}
               {activeCn && (() => {
                 const cn = activeCn;
                 const p = cn.precedence, d = cn.detrend_corr, ni = cn.net_incrementality;
-                const vcol = cn.verdict_class === "ok" ? "#22c55e" : cn.verdict_class === "cannibal" ? "#f87171" : "#fbbf24";
                 const chLabel = (cannib.rows.find((r) => r.channel.key === activeCannibCh) || {}).channel?.label || activeCannibCh;
-                const voteBadge = (v) =>
-                  v === "FOR" ? <span style={{ color: "#22c55e", fontWeight: 700 }}>FOR (오가닉)</span>
-                    : v === "AGAINST" ? <span style={{ color: "#f87171", fontWeight: 700 }}>AGAINST (카니발)</span>
-                      : <span style={{ color: MUTED, fontWeight: 700 }}>ABSTAIN (판단보류)</span>;
-                const gate = cn.power_gate || { blocked: false, reasons: [] };
                 const g = cn.granger;
+                const gate = cn.power_gate || { blocked: false, reasons: [] };
+                // 헤드라인을 칸반 버킷과 동일 규칙으로 계산 → "문제없다는데 왜 잠식의심" 모순 제거.
+                const rr = (cannib.cannibRank || []).find((x) => x.key === activeCannibCh);
+                const lv = rr ? mmmCannibLevel(rr).lv : null;
+                const bucket = !rr || !rr.eligible || lv === 1 ? "unclear" : lv >= 4 ? "danger" : "ok";
+                const votes = [p.vote, d.vote, ni.vote];
+                const nFor = votes.filter((v) => v === "FOR").length;
+                const nAg = votes.filter((v) => v === "AGAINST").length;
+                const nAb = votes.filter((v) => v === "ABSTAIN").length;
+                const headTone = bucket === "danger" ? "danger" : bucket === "ok" ? "ok" : "warn";
+                const headBadge = bucket === "danger" ? "잠식 의심" : bucket === "ok" ? "방어 양호" : "판단 보류";
+                const headWhy = bucket === "danger"
+                  ? (cn.granger_cannibal
+                      ? "같은 주 지표(①②③)는 대체로 괜찮은데, 몇 주 시차를 두고 광고비가 오가닉을 끌어내리는 신호(④)가 나왔어요. 그래서 의심으로 올렸습니다."
+                      : "광고가 늘 때 오가닉이 줄어드는 신호가 나왔어요.")
+                  : bucket === "ok"
+                    ? "네 방향으로 따져봐도 뚜렷한 잠식 신호가 없어요."
+                    : "데이터가 부족하거나 채널끼리 지출이 겹쳐(공선) 판정하기 어려워요.";
+                const voteView = (v) => v === "FOR" ? { t: "괜찮음", c: "#22c55e" } : v === "AGAINST" ? { t: "잠식 신호", c: "#f87171" } : { t: "판단 보류", c: MUTED };
+                const signal = (num, q, help, v, tech) => {
+                  const vv = voteView(v);
+                  return (
+                    <div style={{ background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 14px" }}>
+                      <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text-1)", lineHeight: 1.4, minHeight: "34px" }}>{num} {q}</div>
+                      <div style={{ fontSize: "15px", fontWeight: 700, color: vv.c, margin: "8px 0 4px" }}>{vv.t}</div>
+                      <div style={{ fontSize: "11px", color: MUTED, lineHeight: 1.5 }}>{help}</div>
+                      <div style={{ fontSize: "10px", color: MUTED, marginTop: "6px", opacity: 0.8 }} title="통계 원값(전문가용)">{tech}</div>
+                    </div>
+                  );
+                };
                 return (
                   <section className="block" id="s-cannib-detail">
-                    <h2 className="section-title">§4 채널 상세 — 왜 이 판정인지 ({chLabel})</h2>
-                    <div className="callout" style={{ borderLeft: `3px solid ${vcol}` }}>
-                      <div className="body">
-                        <strong>판정:</strong> {cn.verdict}
-                        <br />
-                        <span style={{ fontSize: "12px", color: MUTED }}>투표 <strong>{cn.vote_summary}</strong> · {cn.is_brand_intercept ? "브랜드 가로채기형" : "프로스펙팅"} 채널 → 잠정 OK 기준 <strong>FOR ≥ {cn.for_bar} AND AGAINST = 0</strong></span>
+                    <h2 className="section-title">이 채널은 왜 이렇게 판정됐나? — {chLabel}</h2>
+                    <Card style={{ marginBottom: "12px", display: "flex", gap: "10px", alignItems: "flex-start", flexWrap: "wrap" }}>
+                      <Badge tone={headTone}>{headBadge}</Badge>
+                      <div style={{ flex: 1, minWidth: "220px" }}>
+                        <div style={{ fontSize: "13px", color: "var(--text-1)", lineHeight: 1.6 }}>{headWhy}</div>
+                        <div style={{ fontSize: "11px", color: MUTED, marginTop: "4px" }}>아래 4가지를 각각 따져본 결과예요 · 괜찮음 {nFor} / 잠식 신호 {nAg} / 판단 보류 {nAb} · 확정은 holdout 실험(5-4)에서만.</div>
                       </div>
-                    </div>
+                    </Card>
                     {gate.blocked && (
-                      <div style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.35)", borderRadius: "8px", padding: "9px 12px", fontSize: "11.5px", color: "var(--text-1)", margin: "8px 0" }}>
-                        🚧 <strong>검정력 게이트 작동</strong> — {(gate.reasons || []).join(" · ")}. {`이 상태에서 "순효과≈0"은 `}<strong>효과 없음이 아니라 증거 없음</strong>이라, ③은 자동 ABSTAIN이고 판정은 <strong>{`"방어/OK"가 될 수 없습니다`}</strong>(상한 INCONCLUSIVE).
+                      <div style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.35)", borderRadius: "8px", padding: "9px 12px", fontSize: "11.5px", color: "var(--text-1)", marginBottom: "10px" }}>
+                        ⓘ 데이터가 적거나 지출 변동이 작아 ③을 신뢰하기 어려워요 — 이럴 땐 &quot;문제 없음&quot;으로 단정하지 않고 보류합니다.
                       </div>
                     )}
-                    <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", margin: "10px 0" }}>
-                      <div className="stat-card" style={{ minWidth: "180px" }}>
-                        <div className="lbl">① 시간 선행성 (저지출 ≤p25, n={p.low_n})</div>
-                        <div className="val" style={{ fontSize: "13px" }}>{voteBadge(p.vote)}</div>
-                        <div style={{ fontSize: "10.5px", color: MUTED }}>slope {p.kpi_slope_per_wk}/주 (p={p.slope_p}) · 누적 {p.kpi_change_over_window_pct}%</div>
-                      </div>
-                      <div className="stat-card" style={{ minWidth: "180px" }}>
-                        <div className="lbl">② 허위상관 (탈추세·차분)</div>
-                        <div className="val" style={{ fontSize: "13px" }}>{voteBadge(d.vote)}</div>
-                        <div style={{ fontSize: "10.5px", color: MUTED }}>raw {d.raw} → detrend {d.detrended} · 1차차분 {d.first_diff}</div>
-                      </div>
-                      <div className="stat-card" style={{ minWidth: "180px" }}>
-                        <div className="lbl">③ 순증분 (net 탄력성)</div>
-                        <div className="val" style={{ fontSize: "13px" }}>{voteBadge(ni.vote)}</div>
-                        <div style={{ fontSize: "10.5px", color: MUTED }}>{isFinite(ni.net_elasticity) ? ni.net_elasticity : "—"} · p={isFinite(ni.p) ? ni.p : "—"}{ni.ci_lo != null ? ` · CI[${ni.ci_lo}, ${ni.ci_hi}]` : ""}{gate.blocked ? " · 게이트 ABSTAIN" : ""}</div>
-                      </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: "10px" }}>
+                      {signal("①", "광고를 늘리기 전에 오가닉이 이미 줄고 있었나?", "이미 줄고 있었다면 하락은 광고 탓이 아닐 수 있어요.", p.vote, `저지출 구간 기울기 ${p.kpi_slope_per_wk}/주 (p=${p.slope_p}) · 누적 ${p.kpi_change_over_window_pct}%`)}
+                      {signal("②", "시즌·추세를 걷어내도 광고 늘 때 오가닉이 줄어드나?", "걷어내도 반대로 움직이면 잠식 의심.", d.vote, `탈추세 상관 ${d.detrended} · 1차차분 ${d.first_diff} (원상관 ${d.raw})`)}
+                      {signal("③", "광고를 늘리면 (잠식 빼고도) 전체 성과가 순증가하나?", "순증가면 방어 양호.", ni.vote, `순증분 탄력성 ${isFinite(ni.net_elasticity) ? ni.net_elasticity : "—"} · p=${isFinite(ni.p) ? ni.p : "—"}${ni.ci_lo != null ? ` · CI[${ni.ci_lo}, ${ni.ci_hi}]` : ""}`)}
                     </div>
-                    {/* ④ 그랜저 인과 — 시차·방향 */}
-                    {g ? (
-                      <div style={{ background: "rgba(122,162,247,0.06)", border: "1px solid rgba(122,162,247,0.2)", borderRadius: "8px", padding: "9px 12px", margin: "8px 0" }}>
-                        <div style={{ fontSize: "12px", fontWeight: 600, color: "#adc6ff" }}>④ 그랜저 인과 — 시차·방향 (동시점 ①~③ 보완)</div>
-                        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginTop: "6px" }}>
-                          <div className="stat-card" style={{ minWidth: "180px" }}>
-                            <div className="lbl">광고비 → 오가닉 (시차 잠식?)</div>
-                            <div className="val" style={{ fontSize: "13px", color: cn.granger_cannibal ? "#f87171" : cn.granger_help ? "#22c55e" : "var(--text-muted)", fontWeight: 700 }}>
-                              {cn.granger_cannibal ? "시차 잠식 신호" : cn.granger_help ? "시차 증분 신호" : "신호 없음"}
-                            </div>
-                            <div style={{ fontSize: "10.5px", color: MUTED }}>lag {g.spend_to_organic.lag} · F={g.spend_to_organic.F} · p={g.spend_to_organic.p} · Δ계수합 {g.spend_to_organic.coefSum}</div>
+                    {/* ④ 그랜저 — 시차 (①~③은 같은 주만 봄) */}
+                    <div style={{ background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 14px", marginTop: "10px" }}>
+                      <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text-1)" }}>④ 광고비가 몇 주 뒤에 오가닉을 끌어내리나? <span style={{ color: MUTED, fontWeight: 400 }}>(①~③은 같은 주만 봐요 · 이건 시차 효과)</span></div>
+                      {g ? (
+                        <>
+                          <div style={{ fontSize: "15px", fontWeight: 700, margin: "8px 0 4px", color: cn.granger_cannibal ? "#f87171" : cn.granger_help ? "#22c55e" : MUTED }}>
+                            {cn.granger_cannibal ? "몇 주 뒤 끌어내리는 신호 있음" : cn.granger_help ? "몇 주 뒤 밀어올리는 신호" : "시차 신호 없음"}
                           </div>
-                          <div className="stat-card" style={{ minWidth: "180px" }}>
-                            <div className="lbl">오가닉 → 광고비 (페이싱?)</div>
-                            <div className="val" style={{ fontSize: "13px", color: cn.pacing ? "#fbbf24" : "var(--text-muted)", fontWeight: 700 }}>{cn.pacing ? "페이싱 감지" : "없음"}</div>
-                            <div style={{ fontSize: "10.5px", color: MUTED }}>lag {g.organic_to_spend.lag} · F={g.organic_to_spend.F} · p={g.organic_to_spend.p}</div>
+                          <div style={{ fontSize: "11px", color: MUTED, lineHeight: 1.5 }}>
+                            {cn.granger_cannibal ? "광고비 과거값이 오가닉의 이후 하락을 설명 → 잠식 의심으로 반영." : cn.granger_help ? "광고비 과거값이 오가닉의 이후 상승을 설명." : "광고비가 이후 오가닉 변화를 설명하지 못함."}
+                            {cn.pacing ? " · ↩ 오가닉이 약할 때 예산을 올린 흔적(페이싱)이 있어, 음의 관계를 잠식으로 단정하긴 어려워요." : ""}
                           </div>
-                        </div>
-                        <p style={{ fontSize: "10.5px", color: "var(--text-1)", margin: "4px 0 0" }}>
-                          {cn.granger_cannibal ? "🔴 광고비 과거값이 오가닉 미래 하락을 추가 설명 → 시차 잠식 의심(판정을 LEAN CANNIBAL로 올림)." : cn.granger_help ? "🟢 광고비 과거값이 오가닉 미래 상승을 추가 설명 → 시차 증분 신호." : "광고비→오가닉 시차 인과 신호 없음."}
-                          {cn.pacing ? " ↩ 페이싱(역인과): 오가닉 약할 때 예산↑ → 음상관은 내생이니 잠식 단정 금지." : ""}
-                          <span style={{ color: MUTED }}> 그랜저=예측 선행성이지 인과 확정 아님. 확정은 holdout.</span>
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="muted" style={{ fontSize: "10.5px", marginTop: "6px" }}>④ 그랜저 인과: 데이터 부족(차분 후 표본&lt;24)으로 시차 검정 생략.</p>
-                    )}
-                    {/* 역인과 점검 박스 */}
-                    {cn.reverse_causality_risk && (
-                      <div style={{ background: "rgba(122,162,247,0.08)", borderRadius: "8px", padding: "8px 11px", fontSize: "11px", color: "var(--text-1)", margin: "6px 0" }}>
-                        ↩ <strong>역인과 점검:</strong> 지출이 시간따라 늘고(↑) 오가닉과 음의 상관 — 오가닉이 약할 때 방어적으로 예산을 올린 <strong>페이싱</strong>이면 ②의 음상관은 광고→오가닉이 아니라 <strong>오가닉→광고(예산 반응)</strong>일 수 있습니다(내생). 이 경우 holdout이 더 필수.
-                      </div>
-                    )}
-                    {/* ⑤ 임펄스 응답(IRF) */}
-                    <div style={{ marginTop: "10px" }}>
-                      <div style={{ fontSize: "12px", fontWeight: 600, color: "#adc6ff" }}>
-                        ⑤ 임펄스 응답(IRF) — 지출 1SD 충격이 {mmm.target === "Regs" ? "가입" : "재활성"}에 몇 주에 걸쳐 얼마나
-                      </div>
-                      <div className="chart-container" style={{ height: "200px", marginTop: "4px" }}>
-                        <canvas ref={irfRef}></canvas>
-                      </div>
-                      <p style={{ fontSize: "10.5px", color: MUTED, marginTop: "4px" }}>
-                        음(−)으로 내려가면 시차 잠식, 양(+)이면 시차 증분. prewhiten 레벨 VAR·관측 — 확정은 holdout. (n&lt;24면 곡선 생략)
-                      </p>
+                          <div style={{ fontSize: "10px", color: MUTED, marginTop: "6px", opacity: 0.8 }} title="Granger F-검정(전문가용)">시차 {g.spend_to_organic.lag}주 · F={g.spend_to_organic.F} · p={g.spend_to_organic.p}</div>
+                        </>
+                      ) : (
+                        <div style={{ fontSize: "11px", color: MUTED, marginTop: "6px" }}>데이터가 부족해 시차 분석은 생략했어요.</div>
+                      )}
+                    </div>
+                    {/* ⑤ IRF */}
+                    <div style={{ marginTop: "12px" }}>
+                      <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text-1)" }}>지출을 한 번 늘리면, 이후 몇 주간 {mmm.target === "Regs" ? "가입" : "성과"}이(가) 어떻게 반응하나</div>
+                      <div style={{ fontSize: "11px", color: MUTED, margin: "2px 0 4px" }}>아래로 내려가면 시차 잠식, 위로 올라가면 시차 증분. <span title="충격반응함수(Impulse Response)">(전문: 임펄스 응답)</span></div>
+                      <div className="chart-container" style={{ height: "200px" }}><canvas ref={irfRef}></canvas></div>
                     </div>
                   </section>
                 );
