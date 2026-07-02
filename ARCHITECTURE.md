@@ -49,7 +49,7 @@ v2-migration/
 | CampaignPvm.jsx | `pvmMath.js` (PVM_MATH) | Bennet 분해·rollup |
 | CreativeAnalyzer.jsx | `creativeMath.js` (CREATIVE_MATH/FATIGUE/STATS) | WLS·피로도 |
 | AbTestHoldout.jsx | `abTestMath.js` (STATS) | z-test·bayesian·powerCurve |
-| MarketingResponse.jsx | `mmmMath.js`+`regMath.js`+`regForecastMath.js`+`regLabMath.js`+`statPrimitives.js` | MMM·OLS·예측·regLab |
+| MarketingResponse.jsx | `mmmMath.js`(MMM 기여분해+`mmmForecast` §7 미래예측)+`regMath.js`(mmmOls)+`responseCannibRank.js` | ①진단·②기여분해·③회귀예측 3탭 단일 CSV/colMap. ③ 예측=`mmmForecast`(②계수 외삽+95%밴드). `regForecastMath`는 mmmMath의 날짜포맷 헬퍼로만, `regLabMath`는 테스트 전용(앱 미사용) |
 | AhaMomentFinder.jsx | `ahaMath.js` (AHA_STATS) | gridSearch·F1/Lift |
 | dashboard/* (5-2) | `dashboardAggregator.js`(getMappedRows·KPI)·`ltvMath.js`·`funnelMath.js`·`segmentMath.js`·`anomalyMath.js`·`pacingMath.js`·`cohortMath.js`·`responseMath.js`(CANNIBAL_STATS) | 탭별 순수 math 추출 완료(골든 커버) |
 | AbTestHoldout 증분 | `incrMath.js`(홀드아웃 증분)·abTestMath.js | readout/incr 추출 |

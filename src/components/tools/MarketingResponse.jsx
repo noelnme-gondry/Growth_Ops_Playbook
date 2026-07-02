@@ -678,8 +678,8 @@ function chartBase() {
 }
 
 export default function MarketingResponse() {
-  // 3단계(index MMM_STAGE_DEFS): diagnose | mmm | lab. 구 "시뮬레이션"(forecast/TF)은
-  // 회귀·미래예측(lab, REG_FORECAST)에 흡수·탭 제거(§12.15). forecast를 set하는 버튼 없음.
+  // 3단계(index MMM_STAGE_DEFS): diagnose | mmm | lab. 구 "forecast" 스테이지는 lab에 흡수 —
+  // ③ lab이 mmmForecast(②계수) §7 미래예측을 렌더(stage==="lab"). 셋 다 shared mmmColMap 사용.
   const [stage, setStage] = useState("diagnose"); // diagnose | mmm | lab
   const [target, setTarget] = useState("Regs");
   const [decompModel, setDecompModel] = useState("ols"); // ols | ridge (merge/ridge 토글)
@@ -733,8 +733,6 @@ export default function MarketingResponse() {
   };
   const colMapSig = mmmColMap ? JSON.stringify(mmmColMap) : "";
   const mmmAnalyzed = mmmAnalyzedSig != null && mmmAnalyzedSig === colMapSig;
-
-  // Lab 상태 (REG_LAB_STATE 전역 미러) — 별도 CSV
 
   // Chart refs
   const cvRef = useRef(null);
