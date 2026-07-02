@@ -42,7 +42,6 @@ import {
   _REG_ROLES,
 } from "@/utils/regLabMath";
 import { REG_FORECAST } from "@/utils/regForecastMath";
-import { getCssVar } from "@/utils/chartUtils";
 import CsvUploader from "@/components/CsvUploader";
 import MmmColumnMapper, { autoGuessColMap, buildPanelFromColMap, mmmPlatformTags } from "@/components/tools/MmmColumnMapper";
 
@@ -644,12 +643,15 @@ const MMM_STAGE_DEFS = [
 // 엔진 groupNames→버킷 매핑(수학 불변, 표시 그룹핑만). tone은 다크/라이트 둘 다 읽히는 중간 채도.
 const MMM_BUCKET_META = {
   base: { label: "기본 수요", tone: "#94a3b8" },
-  season: { label: "시즌·추세", tone: "#38bdf8" },
+  trend: { label: "장기 추세", tone: "#38bdf8" },
   event: { label: "이벤트·구조변화", tone: "#f59e0b" },
   media: { label: "광고 효과", tone: "#8b7ff0" },
 };
+// 아래→위 쌓는 순서. base(=baseline+계절)는 절대 밴드로 별도 처리, 나머지는 그 위 누적.
+const MMM_BUCKET_ORDER = ["base", "trend", "event", "media"];
 function decompBucketOf(g) {
-  if (g === "Trend" || g === "Seasonality") return "season";
+  if (g === "Seasonality") return "base"; // 계절은 기본 수요에 흡수(§유저: baseline+계절=기본 수요)
+  if (g === "Trend") return "trend";
   if (g === "Holidays" || g === "Regime(steps)") return "event";
   return MMM_NONMEDIA_GROUPS.includes(g) ? "event" : "media";
 }
@@ -1025,18 +1027,20 @@ export default function MarketingResponse() {
       // 어느 모드든 모든 밴드를 기준선 위로 쌓아 최상단이 모델선과 일치(=아래 텍스트의 "모델"과 sum 일치).
       if (decompRef.current && decomp) {
         const labels = decomp.weeks.map((w, i) => mmm.panel.weekLabel?.[i] || w.week);
-        const textCol = getCssVar("--text-1") || CHART_THEME.text;
-        const baseData = decomp.weeks.map((w) => w.baseline);
+        // 테마 토큰은 body.light-mode에 재정의됨 → documentElement가 아니라 body에서 읽어야 라이트 반영.
+        const themeVar = (n) => (typeof document !== "undefined" ? getComputedStyle(document.body).getPropertyValue(n).trim() : "") || "";
+        const textCol = themeVar("--text-1") || CHART_THEME.text;
+        const mutedCol = themeVar("--text-muted") || CHART_THEME.muted;
         // 버킷별 주간 합 시계열
         const bucketSeries = (bucket) =>
           decomp.weeks.map((w) =>
             decomp.groupNames.reduce((s, g) => (decompBucketOf(g) === bucket ? s + (w.contrib[g] || 0) : s), 0),
           );
-        // 쌓을 밴드 정의: [{label, series(주간 기여), tone}] — 아래→위 순서
+        // 기본 수요 = baseline(상수) + 계절(Seasonality) → 절대 밴드. 나머지는 그 위 누적.
+        const baseAbsolute = decomp.weeks.map((w, t) => w.baseline + bucketSeries("base")[t]);
         const bands = [];
-        // 기본 수요(baseline)는 원점~baseline 절대 밴드, 나머지는 그 위 누적.
-        bands.push({ label: MMM_BUCKET_META.base.label, absolute: baseData, tone: MMM_BUCKET_META.base.tone });
-        bands.push({ label: MMM_BUCKET_META.season.label, series: bucketSeries("season"), tone: MMM_BUCKET_META.season.tone });
+        bands.push({ label: MMM_BUCKET_META.base.label, absolute: baseAbsolute, tone: MMM_BUCKET_META.base.tone });
+        bands.push({ label: MMM_BUCKET_META.trend.label, series: bucketSeries("trend"), tone: MMM_BUCKET_META.trend.tone });
         bands.push({ label: MMM_BUCKET_META.event.label, series: bucketSeries("event"), tone: MMM_BUCKET_META.event.tone });
         if (decompGrouped) {
           bands.push({ label: MMM_BUCKET_META.media.label, series: bucketSeries("media"), tone: MMM_BUCKET_META.media.tone });
@@ -1048,7 +1052,7 @@ export default function MarketingResponse() {
         }
         // 누적 → 각 밴드의 상단 경계선. fill:"-1"(이전 밴드 상단)로 밴드 색 채움. 맨 아래는 origin.
         const datasets = [];
-        let cum = baseData.map(() => 0);
+        let cum = decomp.weeks.map(() => 0);
         bands.forEach((b, i) => {
           cum = b.absolute ? b.absolute.slice() : cum.map((v, t) => v + (b.series[t] || 0));
           datasets.push({
@@ -1063,17 +1067,7 @@ export default function MarketingResponse() {
             order: 3,
           });
         });
-        // 최상단 = 모델(fitted), 그리고 실제(actual) — 스택 합이 모델과 일치함을 눈으로 확인.
-        datasets.push({
-          label: "모델(합계)",
-          data: decomp.weeks.map((w) => w.fitted),
-          borderColor: "#7aa2f7",
-          backgroundColor: "transparent",
-          fill: false,
-          pointRadius: 0,
-          borderWidth: 2,
-          order: 1,
-        });
+        // 색 밴드 최상단 = 모델(fitted) 자체 → 별도 모델선은 중복이라 생략(§유저). 실제만 점선 오버레이.
         datasets.push({
           label: "실제",
           data: decomp.weeks.map((w) => w.actual),
@@ -1098,8 +1092,8 @@ export default function MarketingResponse() {
             label: (ctx) => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y).toLocaleString()}명`,
           },
         };
-        decompOpts.scales.x.ticks = { ...decompOpts.scales.x.ticks, color: getCssVar("--text-muted") || CHART_THEME.muted, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 };
-        decompOpts.scales.y.ticks = { ...decompOpts.scales.y.ticks, color: getCssVar("--text-muted") || CHART_THEME.muted, callback: (v) => Math.round(v).toLocaleString() };
+        decompOpts.scales.x.ticks = { ...decompOpts.scales.x.ticks, color: mutedCol, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 };
+        decompOpts.scales.y.ticks = { ...decompOpts.scales.y.ticks, color: mutedCol, callback: (v) => Math.round(v).toLocaleString() };
         // 메모 남긴 튀는 주 → 세로 점선 + 번호 뱃지(글씨 겹침 방지, 실제 메모는 아래 표에 동일 번호로).
         const notedSpikes = (decomp.spikes || []).filter((s) => (spikeNotes[`${mmm.target}|${s.week}`] || "").trim());
         const numOf = (s) => notedSpikes.findIndex((n) => n.week === s.week) + 1;
@@ -2137,8 +2131,8 @@ export default function MarketingResponse() {
                         </div>
                       </div>
                       <p className="muted" style={{ fontSize: "11px", marginBottom: "6px", lineHeight: 1.5 }}>
-                        아래에서부터 <b style={{ color: MMM_BUCKET_META.base.tone }}>기본 수요</b> → <b style={{ color: MMM_BUCKET_META.season.tone }}>시즌·추세</b> → <b style={{ color: MMM_BUCKET_META.event.tone }}>이벤트·구조변화</b> → <b style={{ color: MMM_BUCKET_META.media.tone }}>광고 효과</b> 순으로 쌓았어요.
-                        맨 위 <b style={{ color: "#7aa2f7" }}>모델(합계)</b> 선이 이 모든 값의 합이고, <b>실제</b>(점선)에 가까울수록 잘 맞은 거예요.
+                        아래에서부터 <b style={{ color: MMM_BUCKET_META.base.tone }}>기본 수요</b>(계절 포함) → <b style={{ color: MMM_BUCKET_META.trend.tone }}>장기 추세</b> → <b style={{ color: MMM_BUCKET_META.event.tone }}>이벤트·구조변화</b> → <b style={{ color: MMM_BUCKET_META.media.tone }}>광고 효과</b> 순으로 쌓았어요.
+                        색을 다 합친 <b>맨 윗면 = 모델 예측</b>이고, <b>실제</b>(점선)가 그 윗면에 가까울수록 잘 맞은 거예요.
                       </p>
                       {negAlert && (
                         <div style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "9px 12px", marginBottom: "8px", background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.4)", borderRadius: "8px" }}>
@@ -2189,9 +2183,9 @@ export default function MarketingResponse() {
                                       <td>
                                         <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                                           {noteNum > 0 && <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "16px", height: "16px", borderRadius: "50%", background: "#f59e0b", color: "#fff", fontSize: "9px", fontWeight: 700, flexShrink: 0 }}>{noteNum}</span>}
-                                          <b style={{ fontSize: "12px" }}>{lbl != null ? String(lbl) : `주차 ${s.i != null ? s.i + 1 : s.week}`}</b>
+                                          <b style={{ fontSize: "12px" }}>{lbl != null ? String(lbl) : `주차 ${mmm.panel.week?.[s.i] ?? (s.i != null ? s.i + 1 : s.week)}`}</b>
                                         </span>
-                                        {lbl != null && <span style={{ fontSize: "9px", color: MUTED, display: "block" }}>주차 {s.i != null ? s.i + 1 : s.week}</span>}
+                                        {lbl != null && <span style={{ fontSize: "9px", color: MUTED, display: "block" }}>주차 {mmm.panel.week?.[s.i] ?? (s.i != null ? s.i + 1 : s.week)}</span>}
                                       </td>
                                       <td className="tnum" style={{ color: s.dev >= 0 ? POS : NEG }}>{s.dev >= 0 ? "+" : ""}{s.dev.toLocaleString()}명</td>
                                       <td>

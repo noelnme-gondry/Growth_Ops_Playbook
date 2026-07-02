@@ -154,7 +154,9 @@ export function buildPanelFromColMap(headers, rows, colMap, platform = "all") {
   });
   const weekC = r.week[0] || null;
   const week = weekC ? num(weekC.header, false) : baseRows.map((_, i) => i + 1);
-  const weekLabelRaw = weekC ? baseRows.map((row) => row[weekC.header]) : null;
+  // 표시 라벨: 매핑된 날짜 컬럼(2025-01-06 등) 우선, 없으면 주차 컬럼 원본값. 둘 다 없으면 null(→인덱스 폴백).
+  const labelC = r.date || (weekC ? weekC.header : null);
+  const weekLabelRaw = labelC ? baseRows.map((row) => row[labelC]) : null;
   const panel = { week, ch: {}, dummy: {}, steps: {}, targets: {} };
   const chans = r.channels.filter(inPlat);
   for (const ch of chans) panel.ch[ch.key] = num(ch.header, true);
