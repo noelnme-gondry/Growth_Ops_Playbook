@@ -121,23 +121,46 @@ export function colMapMissing(headers, colMap) {
   return miss;
 }
 
-// colMap → MMM panel (index mmmGetPanelFromColMap 이식, All-platform 고정 — v2엔 플랫폼 셀렉터 UI 없음).
-export function buildPanelFromColMap(headers, rows, colMap) {
+// 컬럼 태그 모드(플랫폼 단일 컬럼 없이 헤더명 android/ios 태그로 구분)인지 + 존재하는 태그 목록.
+// index mmmIsTagMode/mmmColMapPlatforms 이식.
+export function mmmPlatformTags(headers, colMap) {
   const r = colMapRoles(headers, colMap);
-  const num = (h, allowNaN) => (rows || []).map((row) => {
+  if (r.platform) return []; // 행 필터(단일 컬럼) 모드는 태그 토글 대상 아님 — 값 자체가 플랫폼
+  const set = new Set();
+  [...r.reg, ...r.react, ...r.channels].forEach((x) => {
+    if (x.plat && x.plat !== "common") set.add(x.plat);
+  });
+  return [...set];
+}
+
+// colMap → MMM panel (index mmmGetPanelFromColMap 이식). platform: "all"|"android"|"ios" —
+// 컬럼 태그 모드면 plat 일치(+공통) 컬럼만 선택, 플랫폼 단일 컬럼(행필터) 모드면 그 값으로 행 필터.
+export function buildPanelFromColMap(headers, rows, colMap, platform = "all") {
+  const r = colMapRoles(headers, colMap);
+  const tagMode = !r.platform && mmmPlatformTags(headers, colMap).length > 0;
+  const P = platform === "all" ? null : platform;
+  const inPlat = (x) => !tagMode || !P || x.plat === P || x.plat === "common";
+  const pick = (list) => {
+    if (!tagMode || !P) return list[0] || null;
+    return list.find((x) => x.plat === P) || list.find((x) => x.plat === "common") || list[0] || null;
+  };
+  let baseRows = rows || [];
+  if (r.platform && P) baseRows = baseRows.filter((row) => String(row[r.platform]) === P);
+  const num = (h, allowNaN) => baseRows.map((row) => {
     const v = row[h];
     if (v == null || String(v).trim() === "") return allowNaN ? NaN : 0;
     const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
     return isNaN(n) ? (allowNaN ? NaN : 0) : n;
   });
   const weekC = r.week[0] || null;
-  const week = weekC ? num(weekC.header, false) : (rows || []).map((_, i) => i + 1);
-  const weekLabelRaw = weekC ? (rows || []).map((row) => row[weekC.header]) : null;
+  const week = weekC ? num(weekC.header, false) : baseRows.map((_, i) => i + 1);
+  const weekLabelRaw = weekC ? baseRows.map((row) => row[weekC.header]) : null;
   const panel = { week, ch: {}, dummy: {}, steps: {}, targets: {} };
-  for (const ch of r.channels) panel.ch[ch.key] = num(ch.header, true);
+  const chans = r.channels.filter(inPlat);
+  for (const ch of chans) panel.ch[ch.key] = num(ch.header, true);
   for (const d of r.dummies) panel.dummy[d.key] = num(d.header, false);
   for (const s of r.steps) panel.steps[s.key] = num(s.header, false);
-  const regC = r.reg[0] || null, reactC = r.react[0] || null;
+  const regC = pick(r.reg), reactC = pick(r.react);
   if (regC) panel.targets.Regs = num(regC.header, false);
   if (reactC) panel.targets.React = num(reactC.header, false);
   const order = week.map((_, i) => i).sort((a, b) => week[a] - week[b]);
@@ -152,7 +175,7 @@ export function buildPanelFromColMap(headers, rows, colMap) {
     panel.targets.RR = panel.week.map((_, i) => panel.targets.Regs[i] + panel.targets.React[i]);
   }
   // deriveWide와 동일한 패널 형태로 — 엔진(mmmChannelEffects/decomp)·렌더가 참조.
-  panel.channels = r.channels.map((c) => ({ key: c.key, label: c.label, kind: c.kind }));
+  panel.channels = chans.map((c) => ({ key: c.key, label: c.label, kind: c.kind }));
   panel.dummyDefs = r.dummies.map((d) => ({ key: d.key, label: d.label }));
   panel.stepDefs = r.steps.map((s) => ({ key: s.key, label: s.label }));
   panel.useDummies = r.dummies.length > 0;

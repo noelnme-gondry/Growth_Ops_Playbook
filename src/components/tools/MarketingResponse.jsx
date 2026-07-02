@@ -30,8 +30,6 @@ import {
   mmmCannibAction,
   mmmCannibActionShort,
   mmmGlobalCannib,
-  mmmGlobalCannibPlain,
-  mmmCannibConf,
   mmmRankCfg,
   CANNIBAL_RANK,
 } from "@/utils/responseCannibRank";
@@ -46,7 +44,7 @@ import {
 } from "@/utils/regLabMath";
 import { REG_FORECAST } from "@/utils/regForecastMath";
 import CsvUploader from "@/components/CsvUploader";
-import MmmColumnMapper, { autoGuessColMap, buildPanelFromColMap } from "@/components/tools/MmmColumnMapper";
+import MmmColumnMapper, { autoGuessColMap, buildPanelFromColMap, mmmPlatformTags } from "@/components/tools/MmmColumnMapper";
 
 /* ============================================================================
  * MarketingResponse (5-18) — MOCK → REAL 와이어링
@@ -138,6 +136,31 @@ const VERDICT_META = {
   uncertain: { txt: "불확실", color: MUTED },
   sparse: { txt: "데이터 부족 ⊘", color: MUTED },
 };
+
+// 상태 배지(Red/Yellow/Green) — 카니발 판정 등 Card 레이아웃 전반에서 재사용.
+const BADGE_TONE = {
+  ok: { bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.45)", color: "#22c55e" },
+  warn: { bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.45)", color: "#fbbf24" },
+  danger: { bg: "rgba(248,113,113,0.12)", border: "rgba(248,113,113,0.45)", color: "#f87171" },
+  neutral: { bg: "var(--bg-2)", border: "var(--border)", color: MUTED },
+};
+function Badge({ tone = "neutral", color, children }) {
+  const c = BADGE_TONE[tone] || BADGE_TONE.neutral;
+  const finalColor = color || c.color;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "3px 10px", borderRadius: "999px", background: color ? `${color}1f` : c.bg, border: `1px solid ${color || c.border}`, color: finalColor, fontWeight: 700, fontSize: "11.5px", whiteSpace: "nowrap" }}>
+      {children}
+    </span>
+  );
+}
+// Card — border/shadow/rounded 래퍼(레거시 톤 복구, §6).
+function Card({ children, style }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "12px", boxShadow: "0 1px 2px rgba(0,0,0,0.04)", padding: "14px 16px", background: "var(--bg-2)", ...style }}>
+      {children}
+    </div>
+  );
+}
 
 function fmtInt(v) {
   if (v == null || !isFinite(v)) return "—";
@@ -506,6 +529,8 @@ export default function MarketingResponse() {
   // 이 이 하나의 패널을 공유. 표준필드(DataFeatureMatrix) 경로 미사용.
   const [mmmColMap, setMmmColMap] = useState(null);
   const [mmmAnalyzedSig, setMmmAnalyzedSig] = useState(null);
+  // 플랫폼 필터(Total/Android/iOS) — colMap 헤더 태그(_android/_ios) 기준. 태그 없으면 토글 자체 숨김.
+  const [platformFilter, setPlatformFilter] = useState("all"); // all | android | ios
 
   // CSV 로드 시 colMap 자동 초기화(이름 기반 부분 추정 — reg/react/채널만, 나머지는 트레이).
   const csvSig = hasData ? `${csvData.fileName}|${(csvData.headers || []).join(",")}` : "";
@@ -563,7 +588,7 @@ export default function MarketingResponse() {
     try {
       // colMap(PRIMARY) → 패널. 미완성이면 매핑 안내(패널 empty).
       if (!mmmColMap) return { empty: true, reason: "컬럼 역할을 매핑하세요 (주차·가입/재활성·채널 spend)." };
-      const built = buildPanelFromColMap(csvData.headers, csvData.raw, mmmColMap);
+      const built = buildPanelFromColMap(csvData.headers, csvData.raw, mmmColMap, platformFilter);
       if (built.missing.length) return { empty: true, reason: "필수 역할 미지정: " + built.missing.join(", ") };
       const panel = trimToActive(built.panel);
       const cfg = { ...MMM_METH_CONFIG, absorbed: new Set() };
@@ -597,7 +622,7 @@ export default function MarketingResponse() {
       }
       return { empty: true, reason: "분석 오류: " + msg };
     }
-  }, [hasData, csvData, target, mmmColMap, mmmAnalyzed]);
+  }, [hasData, csvData, target, mmmColMap, mmmAnalyzed, platformFilter]);
 
   const decomp = useMemo(() => {
     if (!mmm || mmm.empty || stage !== "mmm") return null;
@@ -1182,33 +1207,41 @@ export default function MarketingResponse() {
   };
 
   const effectiveTarget = mmm && !mmm.empty ? mmm.target : target;
-  const targetSelector = () =>
-    availTargets.length > 1 ? (
-      <div className="ab-pillgroup" style={{ marginBottom: "12px" }}>
-        <span className="ab-pillgroup-label">타깃</span>
-        {availTargets.map((t) => (
-          <button key={t} className={`ab-pill ${effectiveTarget === t ? "active" : ""}`} onClick={() => setTarget(t)}>
-            {t === "Regs" ? "가입(Reg)" : t === "React" ? "재활성(React)" : "Reg+React"}
-          </button>
-        ))}
-      </div>
-    ) : null;
+  // 태그(_android/_ios) 있는 컬럼이 매핑돼 있을 때만 플랫폼 토글 노출(단일 플랫폼 컬럼 없는 wide 데이터용).
+  const platformTags = hasData && mmmColMap ? mmmPlatformTags(csvData.headers, mmmColMap) : [];
 
-  const derivedChip = () =>
-    mmm && !mmm.empty ? (
-      <div className="callout ok" style={{ marginBottom: "12px" }}>
-        <div className="ico">✓</div>
-        <div className="body" style={{ fontSize: "12px" }}>
-          <strong>자동 매핑</strong> — 타깃={mmm.target}
-          {mmm.derived.targetMetricLabel ? `(${mmm.derived.targetMetricLabel})` : ""} · 채널=[
-          {mmm.derived.channels.join(", ")}] · 시간={mmm.derived.time} · {mmm.derived.n}기간
-          {mmm.derived.orientation === "long-pivot" ? " · LONG→WIDE 피벗" : ""}
-          {mmm.validate?.warnings?.length ? (
-            <span style={{ color: "#e0af68" }}> · ⚠ {mmm.validate.warnings.length}건 경고</span>
-          ) : null}
-        </div>
+  // 브레드크럼(현재 위치) + 타깃/플랫폼 토글을 한 줄로 병합 — flex justify-between.
+  const controlBar = () => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "12px" }}>
+      <span style={{ fontSize: "12px", color: MUTED }}>
+        채널별 카니발 <span style={{ margin: "0 4px" }}>·</span> MMM Panel
+      </span>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+        {availTargets.length > 1 && (
+          <div className="ab-pillgroup" style={{ margin: 0 }}>
+            <span className="ab-pillgroup-label">타깃</span>
+            {availTargets.map((t) => (
+              <button key={t} className={`ab-pill ${effectiveTarget === t ? "active" : ""}`} onClick={() => setTarget(t)}>
+                {t === "Regs" ? "가입(Reg)" : t === "React" ? "재활성(React)" : "Reg+React"}
+              </button>
+            ))}
+          </div>
+        )}
+        {platformTags.length > 0 && (
+          <div className="ab-pillgroup" style={{ margin: 0 }}>
+            <span className="ab-pillgroup-label">플랫폼</span>
+            <button className={`ab-pill ${platformFilter === "all" ? "active" : ""}`} onClick={() => setPlatformFilter("all")}>Total</button>
+            {platformTags.includes("android") && (
+              <button className={`ab-pill ${platformFilter === "android" ? "active" : ""}`} onClick={() => setPlatformFilter("android")}>Android</button>
+            )}
+            {platformTags.includes("ios") && (
+              <button className={`ab-pill ${platformFilter === "ios" ? "active" : ""}`} onClick={() => setPlatformFilter("ios")}>iOS</button>
+            )}
+          </div>
+        )}
       </div>
-    ) : null;
+    </div>
+  );
 
   // ── LAB stage ──
   if (stage === "lab") {
@@ -1392,39 +1425,40 @@ export default function MarketingResponse() {
         </section>
       ) : (
         <>
-          {targetSelector()}
-          {derivedChip()}
+          {controlBar()}
 
           {/* ── STAGE ① DIAGNOSE (MMM panel) ── */}
           {stage === "diagnose" && (
             <>
-              {/* ── §0 전역 카니발 결론 요약 (worst-case 종합) ── */}
+              {/* ── 메인 뷰: 짧은 평어 결론만 (Card + Badge) — 통계 근거는 아래 아코디언 ── */}
               {cannib && cannib.globalCannib && (() => {
                 const g = cannib.globalCannib;
-                const conf = mmmCannibConf(g);
                 const vc = g.verdict_class;
-                const cls = vc === "cannibal" ? "warning" : vc === "ok" ? "ok" : "warn";
-                const ico = vc === "ok" ? "✓" : "!";
-                const tgtKo = mmm.target === "Regs" ? "가입" : mmm.target === "React" ? "재활성" : mmm.target;
+                const tone = vc === "cannibal" ? "danger" : vc === "ok" ? "ok" : "warn";
+                const badgeTxt = vc === "cannibal" ? "잠식 의심" : vc === "ok" ? "방어 양호" : "판단 보류";
+                const plainTxt = vc === "cannibal"
+                  ? "현재 일부 채널에서 잠식이 의심됩니다."
+                  : vc === "ok"
+                    ? "현재 방어 양호합니다."
+                    : "판단하기엔 데이터·근거가 부족합니다.";
                 return (
-                  <section className="block" id="s-cannib-summary">
-                    <h2 className="section-title">② 카니발(잠식) 여부 — 한눈에 보기</h2>
-                    <div className={`callout ${cls}`}>
-                      <div className="ico">{ico}</div>
-                      <div className="body">
-                        <div style={{ fontSize: "13px", lineHeight: 1.65 }}>{mmmGlobalCannibPlain(g, tgtKo)}</div>
-                        <div style={{ fontSize: "11px", color: MUTED, marginTop: "6px" }}>
-                          통계적 신뢰도 <span style={{ letterSpacing: "1px" }}>{"●".repeat(conf) + "○".repeat(5 - conf)}</span>{" "}
-                          — {g.noIdentified ? "식별 채널 0개" : `식별 채널 ${g.n_identified}개 worst-case`}. {`관측은 "잠식 없음"을 증명하지 못하므로 OK라도 신뢰도 상한은 ●●●○○, 식별 채널이 없으면 ●○○○○.`}
-                        </div>
-                      </div>
-                    </div>
-                    <div style={{ background: "rgba(122,162,247,0.08)", borderRadius: "8px", padding: "10px 12px", fontSize: "11.5px", color: "var(--text-1)", marginTop: "8px" }}>
-                      💡 <strong>쉽게 말하면</strong> — {`"잠식"은 유료 광고가 원래 공짜로 들어올 오가닉 `}{tgtKo}을(를) 빼앗는 것입니다. 아래 §4.5 랭킹에서 <strong>CEI(카니발 근거지수)</strong>가 높은 채널부터 holdout 실험(5-15) 우선순위로 검토하세요. 관측 검정은 용의자를 좁힐 뿐, 확정은 실험입니다.
-                    </div>
-                  </section>
+                  <Card style={{ marginBottom: "14px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                    <Badge tone={tone}>{badgeTxt}</Badge>
+                    <span style={{ fontSize: "13.5px", fontWeight: 600, color: "var(--text-1)" }}>{plainTxt}</span>
+                    <span style={{ fontSize: "11px", color: MUTED, marginLeft: "auto" }}>자세한 근거는 아래 펼치기 ↓</span>
+                  </Card>
                 );
               })()}
+
+              {/* ── 통계 상세는 전부 아코디언으로 격리(기본 접힘) — 근거·검정 원하는 사람만 펼침 ── */}
+              <details className="block" style={{ marginBottom: "14px" }}>
+                <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>
+                  [cannibalization이란 무엇이고, 이 도구에서 말하는 분석들은 무엇인가요?]
+                </summary>
+                <div style={{ marginTop: "12px" }}>
+                  <p className="muted" style={{ fontSize: "12px", lineHeight: 1.7, marginBottom: "14px" }}>
+                    <strong>카니발리제이션(잠식)</strong>이란 유료 광고가 원래 공짜로 들어올 오가닉 유입을 빼앗는 현상입니다. 이 도구는 4가지 독립 신호(①시간 선행성 ②탈추세·차분 상관 ③순증분 탄력성 ④그랜저 인과)를 투표로 종합해 채널별로 &quot;방어 양호 / 잠식 의심 / 판단 보류&quot;를 판정합니다. 관측 검정은 용의자를 좁힐 뿐이며, 확정은 홀드아웃 실험(5-4)에서만 가능합니다.
+                  </p>
 
               {/* ── §4.5 카니발 의심 랭킹 (CEI · 적격 · 5단계 버킷) ── */}
               {cannib && cannib.cannibRank && cannib.cannibRank.length ? (() => {
@@ -1490,51 +1524,46 @@ export default function MarketingResponse() {
                         </button>
                       ))}
                     </div>
-                    <div className="table-wrap">
-                      <table className="data" style={{ fontSize: "11px" }}>
-                        <thead>
-                          <tr>
-                            <th>순위</th><th>채널</th><th>판정</th><th title="근거강도 배지(강/중/약/판단불가)">근거강도</th>
-                            <th title="카니발 근거지수 — 유의하게 음(잠식)일 때만 가산">CEI</th>
-                            <th title="탈추세 잔차 Pearson r · 양측 p">탈추세 r·p</th>
-                            <th title="순증분 탄력성 [95% CI]">net [CI]</th><th>검정력/적격</th><th>권고</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rk.map((r) => {
-                            const L = levOf[r.key];
-                            const w = Math.round(Math.min(1, r.cei / maxCei) * 100);
-                            return (
-                              <tr
-                                key={r.key}
-                                onClick={() => setCannibChannel(r.key)}
-                                style={{ cursor: "pointer", background: r.key === activeCannibCh ? "rgba(122,162,247,0.08)" : undefined }}
-                              >
-                                <td className="tnum">{r.rank}</td>
-                                <td><strong>{r.label}</strong>{r.brand ? " 🏷" : ""}{r.flighted ? " ⚡" : ""}</td>
-                                <td style={{ color: L.color, fontWeight: 600 }}>{L.sym} {L.short}</td>
-                                <td>{r.badge}</td>
-                                <td>
-                                  {r.eligible ? (
-                                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                                      <div style={{ width: "42px", height: "6px", background: "var(--bg-2)", borderRadius: "3px", overflow: "hidden" }}>
-                                        <div style={{ width: `${w}%`, height: "100%", background: r.cei > 0 ? "#f87171" : "var(--text-muted)" }}></div>
-                                      </div>
-                                      <span className="tnum" style={{ fontSize: "10px" }}>{r.cei.toFixed(2)}</span>
-                                    </div>
-                                  ) : (
-                                    <span style={{ color: MUTED, fontSize: "10px" }}>—</span>
-                                  )}
-                                </td>
-                                <td className="tnum">{isFinite(r.rDet) ? r.rDet.toFixed(2) : "—"} · {r.detP}</td>
-                                <td className="tnum">{isFinite(r.netElast) ? r.netElast : "—"}{r.netCiLo != null ? ` [${r.netCiLo}, ${r.netCiHi}]` : ""}</td>
-                                <td>{r.eligible ? (r.gated ? "🔒 공선" : "적격") : `부족(${r.nActive}/${r.total}주)`}</td>
-                                <td title={mmmCannibAction(r)} style={{ maxWidth: "150px" }}>{mmmCannibActionShort(r)}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: "10px" }}>
+                      {rk.map((r) => {
+                        const L = levOf[r.key];
+                        const w = Math.round(Math.min(1, r.cei / maxCei) * 100);
+                        const tone = L.lv >= 5 ? "danger" : L.lv === 4 ? "warn" : L.lv <= 1 ? "neutral" : "ok";
+                        return (
+                          <Card
+                            key={r.key}
+                            style={{
+                              cursor: "pointer",
+                              borderColor: r.key === activeCannibCh ? "rgba(122,162,247,0.55)" : "var(--border)",
+                              background: r.key === activeCannibCh ? "rgba(122,162,247,0.06)" : "var(--bg-2)",
+                            }}
+                          >
+                            <div onClick={() => setCannibChannel(r.key)}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                                <strong style={{ fontSize: "13px" }}>#{r.rank} {r.label}{r.brand ? " 🏷" : ""}{r.flighted ? " ⚡" : ""}</strong>
+                                <Badge tone={tone} color={L.color}>{L.sym} {L.short}</Badge>
+                              </div>
+                              <div style={{ fontSize: "10.5px", color: MUTED, marginTop: "6px" }}>근거강도 {r.badge}</div>
+                              {r.eligible ? (
+                                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "6px" }}>
+                                  <div style={{ width: "50px", height: "6px", background: "var(--bg-1)", borderRadius: "3px", overflow: "hidden" }}>
+                                    <div style={{ width: `${w}%`, height: "100%", background: r.cei > 0 ? "#f87171" : "var(--text-muted)" }}></div>
+                                  </div>
+                                  <span className="tnum" style={{ fontSize: "10px", color: MUTED }}>CEI {r.cei.toFixed(2)}</span>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: "10px", color: MUTED, marginTop: "6px" }}>부족({r.nActive}/{r.total}주)</div>
+                              )}
+                              <div style={{ fontSize: "10px", color: MUTED, marginTop: "4px" }}>
+                                탈추세 r={isFinite(r.rDet) ? r.rDet.toFixed(2) : "—"}·p={r.detP} · net={isFinite(r.netElast) ? r.netElast : "—"}{r.netCiLo != null ? ` [${r.netCiLo},${r.netCiHi}]` : ""}
+                              </div>
+                              <div style={{ fontSize: "10.5px", color: "var(--text-1)", marginTop: "6px", fontWeight: 600 }} title={mmmCannibAction(r)}>
+                                {r.eligible ? (r.gated ? "🔒 공선" : "적격") : ""} {mmmCannibActionShort(r)}
+                              </div>
+                            </div>
+                          </Card>
+                        );
+                      })}
                     </div>
                     <p style={{ fontSize: "10.5px", color: MUTED, marginTop: "8px", lineHeight: 1.6 }}>
                       행 클릭 → 아래 §4 채널 상세로 이동. <strong>CEI</strong>(카니발 근거지수) = 탈추세·차분·net이 <strong>유의하게 음(잠식)</strong>일 때만 가산 → 높을수록 의심 큼. 판정 5단계: ⊘데이터없음 · ●신호없음 · ◐거의없음 · ◑신호조금 · ●카니발.
@@ -1785,6 +1814,8 @@ export default function MarketingResponse() {
                   </section>
                 );
               })()}
+                </div>
+              </details>
             </>
           )}
 
