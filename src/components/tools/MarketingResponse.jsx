@@ -977,7 +977,14 @@ export default function MarketingResponse() {
           );
         }
       }
-      // Fit chart (actual vs fitted vs baseline)
+      // "baseline" 필드는 회귀절편(전체 기간 평균) 단일 상수라 원래 평평함 — 시즌·추세는 그 위에
+      // 별도 contrib로 얹힘. 그래서 이 필드만 그리면 "왜 안 움직이나" 혼란(§ 실사용 피드백) →
+      // 두 차트 모두 baseline+비매체(시즌·추세·휴일·구조변화) 합산 시계열을 같이 씀.
+      const nonMediaGroupsAll = decomp ? decomp.groupNames.filter((g) => MMM_NONMEDIA_GROUPS.includes(g)) : [];
+      const nonMediaSeries = decomp
+        ? decomp.weeks.map((w) => w.baseline + nonMediaGroupsAll.reduce((s, g) => s + (w.contrib[g] || 0), 0))
+        : [];
+      // Fit chart (actual vs fitted vs 시즌·추세 등)
       if (fitRef.current && decomp) {
         const labels = decomp.weeks.map((w, i) => mmm.panel.weekLabel?.[i] || w.week);
         inst.push(
@@ -988,7 +995,7 @@ export default function MarketingResponse() {
               datasets: [
                 { label: "실제", data: decomp.weeks.map((w) => w.actual), borderColor: CHART_THEME.muted, pointRadius: 0, tension: 0.2 },
                 { label: "모델", data: decomp.weeks.map((w) => w.fitted), borderColor: "#7aa2f7", pointRadius: 0, tension: 0.2 },
-                { label: "baseline", data: decomp.weeks.map((w) => w.baseline), borderColor: "#e0af68", borderDash: [5, 4], pointRadius: 0 },
+                { label: "시즌·추세 등(비매체)", data: nonMediaSeries, borderColor: "#e0af68", borderDash: [5, 4], pointRadius: 0, tension: 0.2 },
               ],
             },
             options: chartBase(),
@@ -1002,10 +1009,9 @@ export default function MarketingResponse() {
         const labels = decomp.weeks.map((w, i) => mmm.panel.weekLabel?.[i] || w.week);
         const drawGroups = decomp.groupNames;
         const mediaGroups = drawGroups.filter((g) => !MMM_NONMEDIA_GROUPS.includes(g));
-        const nonMediaGroups = drawGroups.filter((g) => MMM_NONMEDIA_GROUPS.includes(g));
+        const nonMediaSum = nonMediaSeries;
         const palette = ["#7aa2f7", "#f7768e", "#9ece6a", "#e0af68", "#bb9af7", "#7dcfff", "#ff9e64", "#2ac3de"];
         const datasets = [];
-        const nonMediaSum = decomp.weeks.map((w) => w.baseline + nonMediaGroups.reduce((s, g) => s + (w.contrib[g] || 0), 0));
         datasets.push({
           label: "시즌·추세 등 (비매체)",
           data: nonMediaSum,
@@ -2056,9 +2062,9 @@ export default function MarketingResponse() {
                       <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "10px" }}>
                         <div className="stat-card"><div className="lbl">평균 오차(RMSE)</div><div className="val">±{decomp.rmse}명</div></div>
                         <div className="stat-card"><div className="lbl">평균 오차율(MAPE)</div><div className="val">{decomp.mape}%</div></div>
-                        <div className="stat-card"><div className="lbl">기준선(baseline)</div><div className="val">{fmtInt(decomp.baseline)}</div></div>
+                        <div className="stat-card"><div className="lbl">전체 기간 평균</div><div className="val">{fmtInt(decomp.baseline)}</div></div>
                       </div>
-                      <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>실제(회색)와 모델(파랑)이 가까울수록 잘 맞은 거예요.</p>
+                      <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>실제(회색)와 모델(파랑)이 가까울수록 잘 맞은 거예요. 점선(시즌·추세 등)은 광고와 무관한 부분만 뽑아낸 흐름이라 시간에 따라 움직여요 — &quot;전체 기간 평균&quot;(고정값)과는 다른 선입니다.</p>
                       <div className="chart-container" style={{ height: "240px", marginBottom: "12px" }}><canvas ref={fitRef}></canvas></div>
                       <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>매주 성과를 기준선 위에 드라이버별로 쌓은 그래프예요 (범례는 우측).</p>
                       <div className="chart-container" style={{ height: "440px", minHeight: "440px" }}><canvas ref={decompRef}></canvas></div>
