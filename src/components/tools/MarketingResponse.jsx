@@ -36,7 +36,6 @@ import {
   REG_LAB_STATE,
   regLabReadMapping,
   regLabRun,
-  regLabFromMmm,
 } from "@/utils/regLabMath";
 import { REG_FORECAST } from "@/utils/regForecastMath";
 import CsvUploader from "@/components/CsvUploader";
@@ -171,6 +170,49 @@ function StatHead({ title, hint }) {
 function fmtInt(v) {
   if (v == null || !isFinite(v)) return "—";
   return Math.round(v).toLocaleString();
+}
+
+// ③ 회귀·미래예측: 타깃(가입/재활성/Total)×플랫폼(Total/Android/iOS) 토글에 맞는 Y 컬럼들을
+// 인덱스별로 합산(벡터합)해 단일 종속변수를 만들고, X(채널 spend)는 플랫폼으로 필터해 REG_LAB_STATE에
+// 세팅 후 regLabRun 호출. 모든 태그 both → 단일 결합 모델. utils(수학 엔진) 불변, 집계만 여기서.
+const _labTagOf = (h) => {
+  const n = String(h).toLowerCase();
+  if (n.includes("android") || n.includes("aos")) return "android";
+  if (/\bios\b/.test(n) || n.includes("iphone") || n.includes("ipad")) return "ios";
+  return "both";
+};
+function buildAggregatedLab(rows, headers, colMap, target, platform) {
+  if (!rows?.length || !headers?.length || !colMap) return { fits: null, error: "" };
+  const platMatch = (h) => platform === "all" || _labTagOf(h) === platform || _labTagOf(h) === "both";
+  const wantY = (role) =>
+    (target === "Regs" && role === "reg") ||
+    (target === "React" && role === "react") ||
+    (target === "RR" && (role === "reg" || role === "react"));
+  const yCols = headers.filter((h) => wantY((colMap[h] || {}).role) && platMatch(h));
+  if (!yCols.length) return { fits: null, error: "선택한 타깃·플랫폼에 맞는 종속(가입/재활성) 컬럼이 없습니다." };
+  const chCols = headers.filter((h) => (colMap[h] || {}).role === "channel" && platMatch(h));
+  const evCols = headers.filter((h) => (colMap[h] || {}).role === "dummy");
+  const stCols = headers.filter((h) => (colMap[h] || {}).role === "step");
+  const tCol = headers.find((h) => ["week", "date"].includes((colMap[h] || {}).role));
+  const numOf = (v) => parseFloat(String(v).replace(/[^0-9.\-]/g, "")) || 0;
+  const DEP = "__Y_agg__";
+  const augRows = rows.map((r) => ({ ...r, [DEP]: yCols.reduce((s, c) => s + numOf(r[c]), 0) }));
+  REG_LAB_STATE.rows = augRows;
+  REG_LAB_STATE.headers = [DEP, ...chCols, ...evCols, ...stCols, ...(tCol ? [tCol] : [])];
+  REG_LAB_STATE.map = { [DEP]: { role: "dependent", tf: "none", tag: "both" } };
+  chCols.forEach((c) => { REG_LAB_STATE.map[c] = { role: "cost", tf: "adstock_log", tag: "both" }; });
+  evCols.forEach((c) => { REG_LAB_STATE.map[c] = { role: "event", tf: "none", tag: "both" }; });
+  stCols.forEach((c) => { REG_LAB_STATE.map[c] = { role: "step", tf: "step", tag: "both" }; });
+  if (tCol) REG_LAB_STATE.map[tCol] = { role: "time", tf: "none", tag: "both" };
+  REG_LAB_STATE.groupKeep = null;
+  REG_LAB_STATE.groupCol = null;
+  REG_LAB_STATE.fits = null;
+  try {
+    regLabRun();
+    return { fits: REG_LAB_STATE.fits, error: "", yCols, chCols };
+  } catch (e) {
+    return { fits: null, error: e.message };
+  }
 }
 
 /* ── CSV helpers (§7 CRLF+BOM, RFC4180 quoting) — index _mmmDownload/q 이식 ── */
@@ -1285,16 +1327,9 @@ export default function MarketingResponse() {
   const lab = useMemo(() => {
     const bridgeReady = hasData && mmmColMap && Object.values(mmmColMap).some((d) => d && d.role === "channel");
     if (stage !== "lab" || !mmmAnalyzed || !bridgeReady) return { fits: null, error: "" };
-    try {
-      if (!regLabFromMmm(csvData.raw, csvData.headers, mmmColMap, target)) {
-        return { fits: null, error: "회귀 모델을 만들 수 없습니다 — 채널 spend와 종속 타깃(가입/재활성) 매핑을 확인하세요." };
-      }
-      regLabRun();
-      return { fits: REG_LAB_STATE.fits, error: "" };
-    } catch (e) {
-      return { fits: null, error: e.message };
-    }
-  }, [stage, mmmColMap, mmmAnalyzed, hasData, csvData, target]);
+    // 타깃(가입/재활성/Total)×플랫폼(Total/Android/iOS) 토글에 맞춰 Y 합산 + X 필터 → 단일 결합 모델.
+    return buildAggregatedLab(csvData.raw, csvData.headers, mmmColMap, target, platformFilter);
+  }, [stage, mmmColMap, mmmAnalyzed, hasData, csvData, target, platformFilter]);
 
   useEffect(() => {
     const inst = [];
@@ -1562,10 +1597,12 @@ export default function MarketingResponse() {
                       <h2 className="section-title">적합 결과 (모델별)</h2>
                       {tags.map((tag) => {
                         const f = fits[tag];
+                        const tgtKo = target === "Regs" ? "가입" : target === "React" ? "재활성" : "가입+재활성";
+                        const platKo = platformFilter === "android" ? "Android" : platformFilter === "ios" ? "iOS" : "전체 플랫폼";
                         return (
                           <div key={tag} style={{ marginBottom: "16px" }}>
                             <h3 style={{ fontSize: "13px", margin: "8px 0" }}>
-                              모델: <strong>{f.m.dep}</strong> {tag !== "both" ? `(${tag})` : ""} · R²={f.fit.R2.toFixed(4)} · λ={f.lam}
+                              종속변수: <strong>{tgtKo}</strong> · {platKo} · R²={f.fit.R2.toFixed(4)} · λ={f.lam}
                             </h3>
                             <div className="table-wrap">
                               <table className="data" style={{ fontSize: "11.5px" }}>
