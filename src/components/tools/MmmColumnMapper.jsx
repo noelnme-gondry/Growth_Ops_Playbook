@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { _mmmParseDate } from "@/utils/regForecastMath";
 
 /* index.html의 5-18 DnD colMap(§12.20류 이관) — mmmGuessRole/mmmAutoMapPartial/
  * mmmColMapRoles/mmmGetPanelFromColMap을 React 네이티브 HTML5 DnD로 포팅.
@@ -185,6 +186,20 @@ export function buildPanelFromColMap(headers, rows, colMap, platform = "all") {
   panel.dummyDefs = r.dummies.map((d) => ({ key: d.key, label: d.label }));
   panel.stepDefs = r.steps.map((s) => ({ key: s.key, label: s.label }));
   panel.useDummies = r.dummies.length > 0;
+  // 차트·예측 라벨: mmmForecast/차트는 panel.dateLabel·dates·granularity를 읽음(weekLabel 아님) →
+  // 매핑된 주차/날짜 라벨을 그 이름들로도 노출해야 x축·미래라벨이 실제 날짜(t 인덱스 아님)로 나옴.
+  panel.dateLabel = panel.weekLabel || null;
+  if (panel.weekLabel) {
+    const ds = panel.weekLabel.map((s) => _mmmParseDate(s));
+    if (ds.length && ds.every((d) => d)) {
+      const diffs = [];
+      for (let i = 1; i < ds.length; i++) diffs.push((ds[i].getTime() - ds[i - 1].getTime()) / 86400000);
+      diffs.sort((a, b) => a - b);
+      const md = diffs.length ? diffs[Math.floor(diffs.length / 2)] : 7;
+      panel.dates = ds;
+      panel.granularity = { days: md || 7, unit: md >= 28 ? "monthly" : md >= 5 ? "weekly" : "daily" };
+    }
+  }
   return { panel, roles: r, missing: colMapMissing(headers, colMap) };
 }
 

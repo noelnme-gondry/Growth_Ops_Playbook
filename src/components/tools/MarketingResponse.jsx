@@ -166,6 +166,36 @@ function fmtInt(v) {
   return Math.round(v).toLocaleString();
 }
 
+// 천단위 콤마 입력(§7 `type=number`는 콤마 불가 · §12.14 라이브 콤마+커서 보존 포트). type=text로
+// 표시=콤마, 읽기=콤마 strip. onCommit(number|null) — 빈칸이면 null(부모가 기본값 복귀).
+function CommaNumberInput({ value, onCommit, style, placeholder }) {
+  const ref = useRef(null);
+  const focusedRef = useRef(false);
+  const fmt = (n) => (n == null || n === "" || !isFinite(n) ? "" : Number(n).toLocaleString());
+  const [txt, setTxt] = useState(fmt(value));
+  useEffect(() => { if (!focusedRef.current) setTxt(fmt(value)); }, [value]);
+  const handle = (e) => {
+    const raw = e.target.value, caret = e.target.selectionStart;
+    const digitsLeft = raw.slice(0, caret).replace(/[^\d]/g, "").length;
+    const num = raw.replace(/[^\d]/g, "");
+    const formatted = num === "" ? "" : Number(num).toLocaleString();
+    setTxt(formatted);
+    onCommit(num === "" ? null : Number(num));
+    requestAnimationFrame(() => {
+      if (!ref.current) return;
+      let pos = 0, seen = 0;
+      while (pos < formatted.length && seen < digitsLeft) { if (/\d/.test(formatted[pos])) seen++; pos++; }
+      ref.current.setSelectionRange(pos, pos);
+    });
+  };
+  return (
+    <input ref={ref} type="text" inputMode="numeric" value={txt} placeholder={placeholder}
+      onFocus={() => { focusedRef.current = true; }}
+      onBlur={() => { focusedRef.current = false; setTxt(fmt(value)); }}
+      onChange={handle} style={style} />
+  );
+}
+
 
 /* ── CSV helpers (§7 CRLF+BOM, RFC4180 quoting) — index _mmmDownload/q 이식 ── */
 function csvQ(s) {
@@ -2201,79 +2231,35 @@ export default function MarketingResponse() {
                       ⬇ 전체 예측 CSV (계수·계산식·실측·예측)
                     </button>
                   </div>
-                  <h3 style={{ fontSize: "13px", margin: "10px 0 6px" }}>
-                    채널별 미래 예산 (주 평균){" "}
-                    <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>— 기본값 = 최근 8주 평균. 수정하면 그 시나리오로 즉시 재예측.</span>
-                  </h3>
-                  <div className="table-wrap" style={{ maxWidth: "540px" }}>
-                    <table className="data" style={{ fontSize: "12px" }}>
-                      <thead><tr><th>채널</th><th>최근평균/주</th><th>미래 예산/주</th></tr></thead>
-                      <tbody>
-                        {forecast.chans.map((ch) => {
-                          const rec = forecast.recentMean[ch.key] || 0;
-                          const cur = fcBudget[ch.key];
-                          const val = cur != null && isFinite(cur) ? cur : Math.round(rec);
-                          return (
-                            <tr key={ch.key}>
-                              <td>{ch.label}</td>
-                              <td className="tnum" style={{ color: MUTED }}>{fmtInt(rec)}</td>
-                              <td>
-                                <input
-                                  type="number"
-                                  value={val}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    setFcBudget((prev) => {
-                                      const next = { ...prev };
-                                      if (v === "") delete next[ch.key];
-                                      else next[ch.key] = Math.max(0, parseFloat(v) || 0);
-                                      return next;
-                                    });
-                                  }}
-                                  style={{ width: "130px", textAlign: "right" }}
-                                />
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* ── 이벤트·구조변화·휴일더미 미래 처리 ── */}
-                  {forecast.steps && forecast.steps.length ? (
-                    <>
-                      <h3 style={{ fontSize: "13px", margin: "16px 0 6px" }}>
-                        이벤트 · 구조변화 · 휴일더미 미래 처리{" "}
-                        <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>— 비우면 <strong>지속</strong>(마지막 값 유지), 숫자 N이면 N주 켜둔 뒤 끔(0=즉시 끔)</span>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "16px", alignItems: "start" }}>
+                    {/* 좌: 채널별 미래 예산 */}
+                    <div>
+                      <h3 style={{ fontSize: "13px", margin: "10px 0 6px" }}>
+                        채널별 미래 예산 (주 평균){" "}
+                        <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>— 기본값 = 최근 8주 평균. 수정하면 즉시 재예측.</span>
                       </h3>
-                      <div className="table-wrap" style={{ maxWidth: "600px" }}>
+                      <div className="table-wrap">
                         <table className="data" style={{ fontSize: "12px" }}>
-                          <thead><tr><th>항목</th><th>종류</th><th>현재(관측 끝)</th><th>켜둘 미래 주</th></tr></thead>
+                          <thead><tr><th>채널</th><th>최근평균/주</th><th>미래 예산/주</th></tr></thead>
                           <tbody>
-                            {forecast.steps.map((s) => {
-                              const cur = fcStepOff[s.key];
+                            {forecast.chans.map((ch) => {
+                              const rec = forecast.recentMean[ch.key] || 0;
+                              const cur = fcBudget[ch.key];
+                              const val = cur != null && isFinite(cur) ? cur : Math.round(rec);
                               return (
-                                <tr key={s.key}>
-                                  <td>{s.label}</td>
-                                  <td style={{ fontSize: "11px", color: MUTED }}>{s.kind === "step" ? "구조변화" : "이벤트/휴일"}</td>
-                                  <td style={{ color: s.lastOn ? "#22c55e" : MUTED, fontSize: "11px" }}>{s.lastOn ? "켜짐(ON)" : "꺼짐(OFF)"}</td>
+                                <tr key={ch.key}>
+                                  <td>{ch.label}</td>
+                                  <td className="tnum" style={{ color: MUTED }}>{fmtInt(rec)}</td>
                                   <td>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      placeholder="지속"
-                                      value={cur != null && isFinite(cur) ? cur : ""}
-                                      onChange={(e) => {
-                                        const v = e.target.value;
-                                        setFcStepOff((prev) => {
-                                          const next = { ...prev };
-                                          if (v === "") delete next[s.key];
-                                          else next[s.key] = Math.max(0, parseInt(v, 10) || 0);
-                                          return next;
-                                        });
-                                      }}
-                                      style={{ width: "110px", textAlign: "right" }}
+                                    <CommaNumberInput
+                                      value={val}
+                                      onCommit={(n) => setFcBudget((prev) => {
+                                        const next = { ...prev };
+                                        if (n == null) delete next[ch.key];
+                                        else next[ch.key] = Math.max(0, n);
+                                        return next;
+                                      })}
+                                      style={{ width: "120px", textAlign: "right" }}
                                     />
                                   </td>
                                 </tr>
@@ -2282,13 +2268,60 @@ export default function MarketingResponse() {
                           </tbody>
                         </table>
                       </div>
-                      <p className="muted" style={{ fontSize: "11px", marginTop: "4px" }}>
-                        매핑한 휴일/이벤트 더미는 <strong>모델에 포함</strong>되며 미래엔 <strong>마지막 값으로 지속</strong>합니다. 종료 시점은 N으로 지정(예: 12주 뒤 종료 → 12). 영구 구조변화는 비워두세요(지속).
-                      </p>
-                    </>
-                  ) : (
-                    <p className="muted" style={{ fontSize: "11px", marginTop: "8px" }}>매핑된 이벤트·구조변화·휴일더미가 없습니다.</p>
-                  )}
+                    </div>
+
+                    {/* 우: 이벤트·구조변화·휴일더미 미래 처리 */}
+                    <div>
+                      <h3 style={{ fontSize: "13px", margin: "10px 0 6px" }}>
+                        이벤트 · 구조변화 · 휴일더미 미래 처리{" "}
+                        <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>— 비우면 <strong>지속</strong>, N주 뒤 끔(0=즉시)</span>
+                      </h3>
+                      {forecast.steps && forecast.steps.length ? (
+                        <>
+                          <div className="table-wrap">
+                            <table className="data" style={{ fontSize: "12px" }}>
+                              <thead><tr><th>항목</th><th>종류</th><th>현재</th><th>켜둘 미래 주</th></tr></thead>
+                              <tbody>
+                                {forecast.steps.map((s) => {
+                                  const cur = fcStepOff[s.key];
+                                  return (
+                                    <tr key={s.key}>
+                                      <td>{s.label}</td>
+                                      <td style={{ fontSize: "11px", color: MUTED }}>{s.kind === "step" ? "구조변화" : "이벤트/휴일"}</td>
+                                      <td style={{ color: s.lastOn ? "#22c55e" : MUTED, fontSize: "11px" }}>{s.lastOn ? "ON" : "OFF"}</td>
+                                      <td>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          placeholder="지속"
+                                          value={cur != null && isFinite(cur) ? cur : ""}
+                                          onChange={(e) => {
+                                            const v = e.target.value;
+                                            setFcStepOff((prev) => {
+                                              const next = { ...prev };
+                                              if (v === "") delete next[s.key];
+                                              else next[s.key] = Math.max(0, parseInt(v, 10) || 0);
+                                              return next;
+                                            });
+                                          }}
+                                          style={{ width: "100px", textAlign: "right" }}
+                                        />
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                          <p className="muted" style={{ fontSize: "11px", marginTop: "4px" }}>
+                            매핑한 휴일/이벤트 더미는 <strong>모델에 포함</strong>·미래엔 <strong>마지막 값 지속</strong>. 종료는 N주로 지정(예: 12). 영구 구조변화는 비워두세요.
+                          </p>
+                        </>
+                      ) : (
+                        <p className="muted" style={{ fontSize: "11px", marginTop: "8px" }}>매핑된 이벤트·구조변화·휴일더미가 없습니다.</p>
+                      )}
+                    </div>
+                  </div>
 
                   <details style={{ marginTop: "12px" }}>
                     <summary style={{ cursor: "pointer", fontSize: "12px", fontWeight: 600 }}>미래 예측 상세 (기간별)</summary>
