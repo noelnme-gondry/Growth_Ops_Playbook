@@ -80,6 +80,8 @@
 - N개 동급 항목은 `display:grid; grid-template-columns:repeat(N, minmax(0,1fr))`로 **균등 분배**. `flex`는 왼쪽 쏠림("옹기종기")을 만든다 → 지양.
 - ①②③는 ①왼쪽 · ②가운데 · ③오른쪽처럼 순서가 위치로 읽히게.
 - Card(`border`+`radius:12px`+옅은 shadow)로 논리 단위를 시각적으로 묶는다.
+- **범례 많은 차트(회귀 변수 등)**: Chart.js 기본 상단 범례가 캔버스를 짓눌러 레이아웃 붕괴 → `legend.position:"right"`+`maxWidth` + 컨테이너 `minHeight` 명시 + x축 `autoSkip:true, maxTicksLimit` + 툴팁 `toLocaleString()`. `maintainAspectRatio:false, responsive:true`는 기본.
+- **아코디언/토글 안의 차트는 접힘 상태에서 폭 0으로 마운트됨**(§7 0px 함정 재발) → `<details onToggle>`에서 열릴 때 `requestAnimationFrame(()=>window.dispatchEvent(new Event("resize")))`로 재측정. 통계 상세를 접어두면 거의 항상 이 문제가 생긴다.
 
 ---
 

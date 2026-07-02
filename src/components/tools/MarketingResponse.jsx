@@ -302,6 +302,56 @@ function buildCannibGuideDoc(cannib, targetKo) {
   return L.join("\n");
 }
 
+// MMM 기여 분해 전 과정 설명 문서(평어 + 수학·통계 상세 + 현재 결과 요약).
+function buildMmmGuideDoc(mmm, targetKo) {
+  const L = [];
+  const run = mmm.run || {};
+  L.push(`# MMM 기여 분해 — 이 분석은 무엇이고 어떻게 계산하나`);
+  L.push("");
+  L.push(`대상 지표: ${targetKo} · 생성일: ${_today()}`);
+  L.push("");
+  L.push(`## 한 줄 요약`);
+  L.push(`MMM(Marketing Mix Modeling·마케팅 믹스 모델링)은 "지난 ${targetKo} 성과의 등락을 무엇이 얼마나 만들었나"를 나눠보는 분석입니다. 시즌·추세 같은 비매체 요인과 각 광고 채널의 기여를 공정하게 분해하고, "다음 1,000달러를 어디에 쓰면 가장 효율적인가"까지 안내합니다.`);
+  L.push("");
+  L.push(`## 무엇을 보여주나 (평어)`);
+  L.push(`- **무엇이 성과를 움직였나**: 성과 등락의 설명력을 시즌·추세·채널별로 % 배분(설명력 비중).`);
+  L.push(`- **다음 예산은 어디로**: 지금 지출 수준에서 1,000달러를 더 쓸 때 채널별로 늘어나는 ${targetKo} 인원 순위.`);
+  L.push(`- **실제 vs 모델**: 모델이 실제 성과를 얼마나 잘 따라갔는지(오차), 어느 주가 크게 튀었는지.`);
+  L.push("");
+  L.push(`## 수학·통계 상세 (전문가용)`);
+  L.push("");
+  L.push(`### 1. Adstock (광고 잔효)`);
+  L.push(`광고 효과는 집행한 주에만 나타나지 않고 다음 주로 이어집니다(잔향). adstockₜ = spendₜ + λ·adstockₜ₋₁ 형태의 기하 감쇠로 이월을 모델링합니다. λ(0~1)는 **rolling-origin out-of-sample CV**로 선택 — 여러 λ 후보로 "아직 안 본 미래 주"를 예측했을 때 RMSE가 가장 작은 값을 씁니다(in-sample 과적합 방지). 현재 best λ = ${run.best_lambda ?? "—"}.`);
+  L.push("");
+  L.push(`### 2. Saturation (수확체감)`);
+  L.push(`같은 채널도 많이 쓸수록 1달러당 효과가 줄어듭니다. ln(1+adstock) 변환으로 로그-오목(concave) 반응곡선을 만들어, 지출이 커질수록 한계효과가 감소하도록 합니다. "+$1k당 N명"은 현재 지출점에서의 국소 기울기(β/(1+지출)×1000)이며 지출이 클수록 작아집니다.`);
+  L.push("");
+  L.push(`### 3. 회귀 적합 + HAC`);
+  L.push(`ln(${targetKo}) = Σβᵢ·ln(1+adstockᵢ) + 추세 + 계절(Fourier) + 휴일·구조변화 더미 + 오차. 시계열 잔차의 자기상관·이분산을 감안해 **HAC(Newey-West) 표준오차**로 유의성을 보수적으로 평가합니다. 채널끼리 지출이 겹치면 계수가 불안정해지므로 **VIF>10** 항목은 "식별 실패"로 표시합니다.`);
+  L.push("");
+  L.push(`### 4. 탄력성 (Elasticity)`);
+  L.push(`log-log 회귀 계수 β는 "지출 1%↑ → 성과 β%↑"로 읽는 탄력성입니다(예: 0.3이면 지출 10%↑ → 약 3%↑). 95% 신뢰구간이 0을 넘지 않아야 통계적으로 유의합니다.`);
+  L.push("");
+  L.push(`### 5. Shapley R² 분해`);
+  L.push(`각 드라이버가 성과 변동(R²)을 몇 % 설명하는지 **공정하게** 나눕니다. 모델에 변수를 넣는 순서를 바꾸면 누가 공을 가져갈지 달라지므로, 가능한 모든 투입 순서(부분집합)의 기여를 평균낸 Shapley 값을 씁니다(LMG 방식). 모든 몫의 합 = 전체 R². 지출 비중을 그대로 기여도로 쓰는 단순 점유율 분해는 로그·수확체감 때문에 틀리므로 금지합니다.`);
+  L.push("");
+  L.push(`### 6. 주별 기여 분해 (decomposition)`);
+  L.push(`매주 실제값을 baseline(비매체 기저) + 각 드라이버 기여로 쪼갭니다. OLS(중심화)는 평균 대비 ± 변동을, Ridge(정규화)는 매체 0일 때 기준의 절대 기여를 봅니다. RMSE·MAPE로 모델이 실제를 얼마나 잘 따라갔는지 확인하고, 잔차가 평소의 2σ를 넘는 주는 "튀는 구간"으로 표시해 원인을 기록하게 합니다.`);
+  L.push("");
+  if (run.shapley && run.shapley.rows && run.shapley.rows.length) {
+    L.push(`## 현재 데이터 설명력 비중 (Shapley R², total R²=${run.shapley.total})`);
+    [...run.shapley.rows].sort((a, b) => b.r2_share - a.r2_share).forEach((r) => {
+      L.push(`- ${r.driver}: ${(r.pct || 0).toFixed(1)}%`);
+    });
+    L.push("");
+  }
+  L.push(`## 꼭 기억할 것`);
+  L.push(`MMM는 관측 데이터 기반 **연관·기술(descriptive) 모델**이지 인과 확정이 아닙니다. "다음 예산 순위"는 반응곡선상의 가설이며, 실제 증분·ROI 확정은 홀드아웃 실험에서 합니다. 단기 캠페인 단위 배분은 예산 배분 시뮬레이터(5-3)를 쓰세요.`);
+  L.push("");
+  L.push(`— Growth Ops Playbook · 마케팅 반응 분석(MMM)`);
+  return L.join("\n");
+}
+
 /* ── §7 살아있는 수식 예측 CSV (index downloadMmmForecastCsv 이식) ──
  * spend 칸을 바꾸면 adstock→ln→예측이 엑셀 수식으로 자동 연쇄 계산.  */
 function buildForecastCsv(fc, target) {
@@ -983,11 +1033,28 @@ export default function MarketingResponse() {
           pointRadius: 0,
           borderWidth: 1.5,
         });
+        // 회귀 변수(드라이버)가 많아 기본 상단 범례가 캔버스를 짓눌러 레이아웃 붕괴 →
+        // 범례 우측 이동 + 스크롤 가능, x축 autoSkip, 툴팁 천단위 콤마.
+        const decompOpts = chartBase();
+        decompOpts.plugins.legend = {
+          position: "right",
+          align: "start",
+          maxWidth: 160,
+          labels: { color: CHART_THEME.text, font: { size: 11 }, boxWidth: 12, boxHeight: 12, padding: 8, usePointStyle: true },
+        };
+        decompOpts.plugins.tooltip = {
+          ...decompOpts.plugins.tooltip,
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y).toLocaleString()}명`,
+          },
+        };
+        decompOpts.scales.x.ticks = { ...decompOpts.scales.x.ticks, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 };
+        decompOpts.scales.y.ticks = { ...decompOpts.scales.y.ticks, callback: (v) => Math.round(v).toLocaleString() };
         inst.push(
           new Chart(decompRef.current.getContext("2d"), {
             type: "line",
             data: { labels, datasets },
-            options: chartBase(),
+            options: decompOpts,
           }),
         );
       }
@@ -1201,6 +1268,11 @@ export default function MarketingResponse() {
   }, [stage, labVersion]);
 
   /* ------------------------------ RENDER ------------------------------ */
+  // 아코디언 안 차트는 접힘 상태에서 폭 0으로 마운트됨(§7 함정) → 펼칠 때 resize 이벤트로 재측정.
+  const onAccordionToggle = (e) => {
+    if (e.currentTarget.open) requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+  };
+
   // index.html MMM_STAGE_DEFS(3단계) + renderMmmStageTabs 카드형 탭 이식. 구 "시뮬레이션"(TF)은
   // §12.15대로 회귀·미래예측(lab)에 흡수. 카드: no·아이콘·제목·설명 + active 하이라이트.
   const renderTabs = () => (
@@ -1679,7 +1751,7 @@ export default function MarketingResponse() {
               })()}
 
               {/* ── 통계 근거·방법론 전부 여기로 격리(기본 접힘) — 비전문 유저는 위 칸반·평어만 보면 됨 ── */}
-              <details className="block" style={{ marginBottom: "14px" }}>
+              <details className="block" style={{ marginBottom: "14px" }} onToggle={onAccordionToggle}>
                 <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>
                   카니발이 뭐고, 이 판정은 어떻게 나온 건가요? — 추세·데이터 위생·단순모델 점검 (통계 상세)
                 </summary>
@@ -1873,247 +1945,275 @@ export default function MarketingResponse() {
           )}
 
           {/* ── STAGE ② MMM ── */}
-          {stage === "mmm" && (
+          {stage === "mmm" && (() => {
+            const shRows = (mmm.run.shapley?.rows || []).slice().sort((a, b) => b.r2_share - a.r2_share);
+            const PLAIN_DRV = { Trend: "시간 추세", Seasonality: "시즌·계절", Holidays: "휴일·이벤트", "Regime(steps)": "구조 변화", Regime: "구조 변화", baseline: "기본값" };
+            const plainDrv = (nm) => PLAIN_DRV[nm] || nm;
+            const isMediaDrv = (nm) => !MMM_NONMEDIA_GROUPS.includes(nm) && nm !== "baseline";
+            const tgtKo = mmm.target === "Regs" ? "가입" : mmm.target === "React" ? "재활성" : mmm.target;
+            const topDrv = shRows[0];
+            const topMedia = shRows.find((r) => isMediaDrv(r.driver));
+            const headline = shRows.length
+              ? `${tgtKo} 성과를 움직인 건 대부분 ${plainDrv(topDrv.driver)}(${(topDrv.pct || 0).toFixed(0)}%)였고${topMedia ? `, 광고 중엔 ${topMedia.driver}가 가장 컸어요` : "예요"}.`
+              : "기여 분해 결과를 계산할 수 없어요.";
+            const maxPct = Math.max(0.0001, ...shRows.map((r) => r.pct || 0));
+            const barColor = (nm) => isMediaDrv(nm) ? "#7F77DD" : nm === "Seasonality" ? "#5DCAA5" : nm === "baseline" ? "var(--border-strong)" : "#85B7EB";
+            const sat = mmm.run.saturationByChannel || {};
+            const ranked = Object.values(sat)
+              .map((s) => ({ ...s, curMarg: (s.ln_coef / (1 + (s.recentMean || 0))) * 1000 }))
+              .filter((s) => s.ln_coef > 0 && s.curMarg > 0)
+              .sort((a, b) => b.curMarg - a.curMarg);
+            return (
             <>
-              <section className="block" id="s-effects">
-                <h2 className="section-title">채널별 효과 — {mmm.target}</h2>
-                <div className="table-wrap">
-                  <table className="data" style={{ fontSize: "11.5px" }}>
-                    <thead>
-                      <tr>
-                        <th>채널</th>
-                        <th title="지출 +10% 시 결과 탄력성">지출 +10%</th>
-                        <th title="현 지출점에서 +$1,000당 주간 결과 증분(명)">+$1,000당</th>
-                        <th>판정</th>
-                        <th title="p값 → 신뢰도">신뢰도</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {mmm.effects.map((e) => {
-                        const vm = VERDICT_META[e.verdict] || VERDICT_META.uncertain;
-                        const dim = e.sparse;
-                        const elasPct = (e.elas * 10).toFixed(1);
-                        return (
-                          <tr key={e.key} style={dim ? { opacity: 0.55 } : undefined}>
-                            <td><strong>{e.label}</strong></td>
-                            <td className="tnum" style={{ color: e.elas >= 0 ? NEG : POS }}>{e.elas >= 0 ? "+" : ""}{elasPct}%</td>
-                            <td className="tnum">{e.weeklyPer1k == null ? "—" : Math.round(e.weeklyPer1k).toLocaleString() + "명"}</td>
-                            <td style={{ color: vm.color, fontWeight: 600 }}>{vm.txt}</td>
-                            <td style={{ letterSpacing: "1px" }}>{pDots(e.p)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {mmm.effects.some((e) => e.sparse) && (
-                  <p style={{ fontSize: "11px", color: MUTED, marginTop: "6px" }}>
-                    ⊘ 데이터 부족 채널(흐리게): {mmm.effects.filter((e) => e.sparse).map((e) => `${e.label}(${e.nonzero}/${e.total}주)`).join(", ")}
-                  </p>
-                )}
-                {mmm.effects.logDropped > 0 && (
-                  <p style={{ fontSize: "11px", color: MUTED }}>ⓘ 타깃≤0인 {mmm.effects.logDropped}주가 log-log 적합에서 제외됨.</p>
-                )}
+              {/* ── 메인: 평어 헤드라인 ── */}
+              <Card style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <Badge color="#7aa2f7">기여 분해</Badge>
+                <span style={{ fontSize: "13.5px", fontWeight: 600, color: "var(--text-1)" }}>{headline}</span>
+              </Card>
+
+              {/* ── 메인: 무엇이 성과를 움직였나 — 드라이버 기여 바 (Shapley %) ── */}
+              <section className="block">
+                <h2 className="section-title">무엇이 성과를 움직였나 <span style={{ fontSize: "12px", color: MUTED, fontWeight: 400 }}>· 설명력 비중</span></h2>
+                {shRows.length ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "6px" }}>
+                    {shRows.map((r) => (
+                      <div key={r.driver} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span style={{ width: "96px", fontSize: "12.5px", textAlign: "right", color: "var(--text-1)" }}>{plainDrv(r.driver)}</span>
+                        <div style={{ flex: 1, background: "var(--bg-1)", borderRadius: "6px", height: "20px" }}>
+                          <div style={{ width: `${Math.round((r.pct || 0) / maxPct * 100)}%`, minWidth: "2px", background: barColor(r.driver), height: "100%", borderRadius: "6px" }}></div>
+                        </div>
+                        <span style={{ width: "44px", fontSize: "12.5px", fontWeight: 600 }}>{(r.pct || 0).toFixed(0)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : <p className="muted" style={{ fontSize: "12px" }}>계산할 수 없어요.</p>}
+                <p className="muted" style={{ fontSize: "11px", marginTop: "8px" }}>지난 성과의 등락을 무엇이 얼마나 설명하는지 나눠본 결과예요. 진한 보라 = 광고 채널. <span title="Shapley R² 분해 — 모든 투입 순서를 평균낸 공정 배분, 합=전체 R²">(전문: Shapley R² 분해)</span></p>
               </section>
 
-              <section className="block" id="s-budget-guide">
-                <h2 className="section-title">§5.3 예산 배분 가이드</h2>
-                {(() => {
-                  const sat = mmm.run.saturationByChannel || {};
-                  const ranked = Object.values(sat)
-                    .map((s) => ({ ...s, curMarg: (s.ln_coef / (1 + (s.recentMean || 0))) * 1000 }))
-                    .filter((s) => s.ln_coef > 0 && s.curMarg > 0)
-                    .sort((a, b) => b.curMarg - a.curMarg);
-                  return ranked.length ? (
-                    <ol style={{ fontSize: "12px", lineHeight: 1.9, paddingLeft: "20px" }}>
-                      {ranked.map((s, i) => (
-                        <li key={s.label}>
-                          <strong>{s.label}</strong> — +$1k당 +{s.curMarg.toFixed(1)}명 · 현 지출 ${((s.recentMean || 0) / 1000).toFixed(1)}k/주
-                          {i === 0 && <span className="chip ok" style={{ marginLeft: "6px", fontSize: "9.5px", padding: "1px 6px" }}>다음 예산 우선</span>}
-                        </li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p className="muted" style={{ fontSize: "12px" }}>양(+)의 한계효율 채널이 없어 우선순위를 정할 수 없습니다.</p>
-                  );
-                })()}
-                <p style={{ fontSize: "11px", color: MUTED, marginTop: "6px" }}>
-                  가설 수준 안내(관측 회귀 외삽). 실제 배분·시나리오는 5-3 예산 배분 시뮬레이터를 사용하세요.
-                </p>
-              </section>
+              {/* ── 메인: 다음 예산은 여기로 (액션 카드) ── */}
+              {ranked.length > 0 && (
+                <section className="block" style={{ border: "2px solid var(--primary, #adc6ff)" }}>
+                  <h2 className="section-title">🎯 다음 예산은 여기로 <span style={{ fontSize: "12px", color: MUTED, fontWeight: 400 }}>· 지금 지출에서 +$1,000당 늘어나는 {tgtKo}</span></h2>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {ranked.map((s, i) => (
+                      <div key={s.label} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 12px", background: i === 0 ? "rgba(122,162,247,0.1)" : "transparent", borderRadius: "8px" }}>
+                        <span style={{ fontSize: "15px", fontWeight: 700, color: i === 0 ? "#7aa2f7" : MUTED, minWidth: "20px" }}>{i + 1}</span>
+                        <span style={{ flex: 1, fontSize: "14px", fontWeight: i === 0 ? 700 : 400 }}>{s.label}</span>
+                        <span style={{ fontSize: "14px", fontWeight: 600, color: "#22c55e" }}>+{s.curMarg.toFixed(0)}명</span>
+                        <span style={{ fontSize: "12px", color: MUTED }}>현 ${((s.recentMean || 0) / 1000).toFixed(1)}k/주</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="muted" style={{ fontSize: "11px", marginTop: "8px" }}>많이 쓸수록 1달러당 효과는 줄어요(수확체감). 관측 회귀 기반 가설 — 단기 캠페인 배분은 예산 배분 도구(5-3)에서. 음(−)의 효율 채널은 노이즈라 제외했어요.</p>
+                </section>
+              )}
 
-              <section className="block" id="s-mmm">
-                <h2 className="section-title">§5 MMM — {mmm.target} (adstock CV · 탄력성 · Shapley · 수확체감)</h2>
-                <div className="alloc-card" style={{ marginBottom: "8px" }}>
-                  <p style={{ fontSize: "12px", color: MUTED, margin: 0 }}>
-                    adstock λ는 rolling-origin OOS CV로 선택(in-sample 아님) → <strong>best λ={mmm.run.best_lambda}</strong>
-                    {mmm.run.collinear_pairs?.length ? ` · 공선쌍(|r|≥0.85): ${mmm.run.collinear_pairs.map((p) => `${p.a}~${p.b}(${p.corr})`).join(", ")}` : " · 공선쌍: 없음"}
-                  </p>
-                </div>
-                {/* ① adstock λ CV — full width */}
-                <div className="chart-container" style={{ height: "200px", marginBottom: "12px" }}><canvas ref={cvRef}></canvas></div>
-                {/* ② 탄력성 | VIF — 2-col */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
-                  <div>
-                    <p style={{ fontSize: "12px", margin: "0 0 4px" }}>탄력성 (log-log, AR1) — %ΔY/%Δspend</p>
-                    <div className="table-wrap">
-                      <table className="data" style={{ fontSize: "11px" }}>
-                        <thead><tr><th>변수</th><th>coef</th><th>95% CI</th><th>p</th><th>유의</th></tr></thead>
-                        <tbody>
-                          {mmm.run.elasticities.map((e) => {
-                            const ciNonzero = e.ci_lo > 0 || e.ci_hi < 0;
-                            return (
-                              <tr key={e.var}>
-                                <td>{e.var}</td>
-                                <td className="tnum">{e.coef}</td>
-                                <td className="tnum" style={{ fontSize: "11px" }}>[{e.ci_lo}, {e.ci_hi}]</td>
-                                <td className="tnum">{e.p}</td>
-                                <td>{ciNonzero ? <span className="chip ok" style={{ fontSize: "10px", padding: "1px 6px" }}><span className="dot"></span>CI≠0</span> : "—"}</td>
+              {/* ── 아코디언 A: 실제 vs 모델 (fit + 드라이버 분해 + 튀는 주) ── */}
+              <details className="block" onToggle={onAccordionToggle}>
+                <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>실제 성과와 모델이 얼마나 맞나? — 실제 vs 모델 그래프 · 드라이버 분해 · 튀는 주</summary>
+                <div style={{ marginTop: "12px" }}>
+                  <div className="ab-pillgroup" style={{ marginBottom: "10px" }}>
+                    <span className="ab-pillgroup-label">모델</span>
+                    <button className={`ab-pill ${decompModel === "ols" ? "active" : ""}`} onClick={() => setDecompModel("ols")}>OLS(중심화)</button>
+                    <button className={`ab-pill ${decompModel === "ridge" ? "active" : ""}`} onClick={() => setDecompModel("ridge")}>Ridge(절대)</button>
+                  </div>
+                  {decomp ? (
+                    <>
+                      <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "10px" }}>
+                        <div className="stat-card"><div className="lbl">평균 오차(RMSE)</div><div className="val">±{decomp.rmse}명</div></div>
+                        <div className="stat-card"><div className="lbl">평균 오차율(MAPE)</div><div className="val">{decomp.mape}%</div></div>
+                        <div className="stat-card"><div className="lbl">기준선(baseline)</div><div className="val">{fmtInt(decomp.baseline)}</div></div>
+                      </div>
+                      <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>실제(회색)와 모델(파랑)이 가까울수록 잘 맞은 거예요.</p>
+                      <div className="chart-container" style={{ height: "240px", marginBottom: "12px" }}><canvas ref={fitRef}></canvas></div>
+                      <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>매주 성과를 기준선 위에 드라이버별로 쌓은 그래프예요 (범례는 우측).</p>
+                      <div className="chart-container" style={{ height: "440px", minHeight: "440px" }}><canvas ref={decompRef}></canvas></div>
+                      <div className="table-wrap" style={{ marginTop: "12px" }}>
+                        <table className="data" style={{ fontSize: "11.5px" }}>
+                          <thead><tr><th>드라이버</th><th>{decomp.level ? "평균 기여" : "주별 변동(swing)"}</th><th>매체?</th></tr></thead>
+                          <tbody>
+                            {decomp.driverStats.map((d) => (
+                              <tr key={d.name}>
+                                <td>{d.name}</td>
+                                <td className="tnum">{decomp.level ? `${d.avg >= 0 ? "+" : ""}${fmtInt(d.avg)}명` : `±${fmtInt(d.swing)}명/주`}</td>
+                                <td>{d.media ? "✓" : MMM_NONMEDIA_GROUPS.includes(d.name) ? "baseline" : ""}</td>
                               </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                  <div>
-                    <p style={{ fontSize: "12px", margin: "0 0 4px" }}>VIF (&gt;{mmm.cfg.vifThreshold} = 식별 실패)</p>
-                    <div className="table-wrap">
-                      <table className="data" style={{ fontSize: "11px" }}>
-                        <thead><tr><th>변수</th><th>VIF</th></tr></thead>
-                        <tbody>
-                          {mmm.run.vif.filter((v) => !v.var.startsWith("sin") && !v.var.startsWith("cos")).map((v) => (
-                            <tr key={v.var}>
-                              <td>{v.var}</td>
-                              <td className="tnum" style={{ color: v.vif > mmm.cfg.vifThreshold ? POS : undefined }}>{v.vif}{v.vif > mmm.cfg.vifThreshold ? " ⚠" : ""}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {decomp.spikes && decomp.spikes.length > 0 && (
+                        <>
+                          <h3 className="section-title" style={{ fontSize: "13.5px", marginTop: "16px" }}>🔎 튀는 구간 (평소와 다르게 크게 벗어난 주)</h3>
+                          <div className="table-wrap">
+                            <table className="data" style={{ fontSize: "11.5px" }}>
+                              <thead><tr><th>주</th><th>기준선 대비</th><th>자동 진단</th><th>메모 (원인 기록)</th></tr></thead>
+                              <tbody>
+                                {decomp.spikes.map((s) => {
+                                  const lbl = mmm.panel.weekLabel && s.i != null ? mmm.panel.weekLabel[s.i] : null;
+                                  const noteKey = `${mmm.target}|${s.week}`;
+                                  const clsLabel = s.cls === "channel"
+                                    ? { txt: "채널 스파크", color: "#7aa2f7" }
+                                    : s.cls === "baseline"
+                                      ? { txt: "기준선·계절 변동", color: "#22c55e" }
+                                      : { txt: "모델 밖(원인 입력 권장)", color: "#fbbf24" };
+                                  const driverTxt = s.cls === "unexplained"
+                                    ? `잔차 ${s.residual >= 0 ? "+" : ""}${s.residual.toLocaleString()}명`
+                                    : `${s.domDriver} ${s.domVal >= 0 ? "+" : ""}${s.domVal.toLocaleString()}명`;
+                                  return (
+                                    <tr key={s.week}>
+                                      <td className="tnum">t{s.i != null ? s.i + 1 : s.week}{lbl != null && <span style={{ fontSize: "9px", color: MUTED }}><br />{String(lbl)}</span>}</td>
+                                      <td className="tnum" style={{ color: s.dev >= 0 ? POS : NEG }}>{s.dev >= 0 ? "+" : ""}{s.dev.toLocaleString()}명</td>
+                                      <td>
+                                        <span style={{ color: clsLabel.color, fontWeight: 600 }}>{clsLabel.txt}</span>
+                                        <span style={{ fontSize: "10px", color: MUTED }}><br />주 원인: {driverTxt}</span>
+                                      </td>
+                                      <td>
+                                        <input
+                                          value={spikeNotes[noteKey] || ""}
+                                          onChange={(e) => setSpikeNotes((n) => ({ ...n, [noteKey]: e.target.value }))}
+                                          placeholder="이 주에 무슨 일? (예: 앱스토어 피처드, 경쟁사 이슈)"
+                                          style={{ width: "100%", background: "var(--bg-2)", color: "var(--text-1)", border: "1px solid var(--border)", borderRadius: "4px", padding: "4px 7px", fontSize: "11px" }}
+                                        />
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <p className="muted" style={{ fontSize: "12px" }}>분해를 계산할 수 없습니다(ridge 특이·데이터 부족).</p>
+                  )}
                 </div>
-                {/* ③ Shapley R² — full width */}
-                <p style={{ fontSize: "12px", margin: "10px 0 4px" }}>Shapley R² 분해 (설명분산의 공정 배분) · total R²={mmm.run.shapley?.total ?? "—"}</p>
-                <div className="chart-container" style={{ height: "200px", marginBottom: "8px" }}><canvas ref={shapleyRef}></canvas></div>
-                {/* ④ 수확체감 — chart | per-channel table 2-col */}
-                <p style={{ fontSize: "12px", margin: "10px 0 4px" }}>수확체감 — 채널별 한계 응답(+$1k당)</p>
-                <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: "10px", alignItems: "start" }}>
-                  <div className="chart-container" style={{ height: "240px" }}><canvas ref={satRef}></canvas></div>
-                  <div>
-                    <div className="table-wrap">
-                      <table className="data" style={{ fontSize: "11px" }}>
-                        <thead><tr><th>채널</th><th>현 지출<br />+$1k당</th><th>$10k당</th><th>$35k당</th><th>$60k당</th></tr></thead>
-                        <tbody>
-                          {(() => {
-                            const sbc = mmm.run.saturationByChannel || {};
-                            const keys = Object.keys(sbc);
-                            if (!keys.length) return <tr><td colSpan="5" style={{ color: MUTED }}>—</td></tr>;
-                            const cell = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v}명`);
-                            return keys.map((k) => {
-                              const s = sbc[k], m = s.marginal_kpi_per_1k || {}, neg = s.ln_coef < 0;
-                              const curMarg = s.recentMean > 0 ? +((s.ln_coef / (1 + s.recentMean)) * 1000).toFixed(1) : null;
-                              return (
-                                <tr key={k} style={neg ? { opacity: 0.55 } : undefined}>
-                                  <td><strong>{s.label}</strong>{neg ? <span style={{ fontSize: "9px", color: "#fbbf24" }}> 음수=노이즈</span> : ""}</td>
-                                  <td className="tnum" style={{ color: "#adc6ff" }}>{curMarg == null ? "—" : cell(curMarg)}{curMarg != null && <span style={{ fontSize: "9px", color: MUTED }}><br />@${(s.recentMean / 1000).toFixed(1)}k</span>}</td>
-                                  <td className="tnum">{cell(m["$10k"])}</td>
-                                  <td className="tnum">{cell(m["$35k"])}</td>
-                                  <td className="tnum">{cell(m["$60k"])}</td>
-                                </tr>
-                              );
-                            });
-                          })()}
-                        </tbody>
-                      </table>
-                    </div>
-                    <p className="muted" style={{ fontSize: "10.5px", marginTop: "4px" }}>
-                      <strong>&quot;+$1k당 N명&quot;</strong> = 그 지출 수준에서 1,000달러 더 쓸 때 늘어나는 결과(지출↑일수록 작아짐=수확체감). <strong>음수 채널은 노이즈</strong>(공선·데이터 부실 — 예산 결정 금지). 절대 인원은 holdout(5-15), 효율(CPR)은 비용 대비 따로.
+              </details>
+
+              {/* ── 아코디언 B: 이 숫자들은 어떻게 나왔나요? (adstock CV·탄력성·VIF·Shapley·수확체감·채널효과) ── */}
+              <details className="block" onToggle={onAccordionToggle}>
+                <summary style={{ cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "var(--primary, #adc6ff)", padding: "4px 0" }}>이 숫자들은 어떻게 나왔나요? — 광고 잔효(adstock)·수확체감·기여도 계산 (통계 상세)</summary>
+                <div style={{ marginTop: "12px" }}>
+                  <div className="alloc-card" style={{ marginBottom: "8px" }}>
+                    <p style={{ fontSize: "12px", color: MUTED, margin: 0 }}>
+                      adstock λ는 rolling-origin OOS CV로 선택(in-sample 아님) → <strong>best λ={mmm.run.best_lambda}</strong>
+                      {mmm.run.collinear_pairs?.length ? ` · 공선쌍(|r|≥0.85): ${mmm.run.collinear_pairs.map((p) => `${p.a}~${p.b}(${p.corr})`).join(", ")}` : " · 공선쌍: 없음"}
                     </p>
                   </div>
-                </div>
-              </section>
-
-              <section className="block" id="s-decomp">
-                <h2 className="section-title">§5.5 기여 분해 — 실제 vs 모델 · {mmm.target}</h2>
-                <div className="ab-pillgroup" style={{ marginBottom: "10px" }}>
-                  <span className="ab-pillgroup-label">모델</span>
-                  <button className={`ab-pill ${decompModel === "ols" ? "active" : ""}`} onClick={() => setDecompModel("ols")}>OLS(중심화)</button>
-                  <button className={`ab-pill ${decompModel === "ridge" ? "active" : ""}`} onClick={() => setDecompModel("ridge")}>Ridge(절대)</button>
-                </div>
-                {decomp ? (
-                  <>
-                    <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px" }}>
-                      <div className="stat-card"><div className="lbl">RMSE</div><div className="val">±{decomp.rmse}명</div></div>
-                      <div className="stat-card"><div className="lbl">MAPE</div><div className="val">{decomp.mape}%</div></div>
-                      <div className="stat-card"><div className="lbl">baseline</div><div className="val">{fmtInt(decomp.baseline)}</div></div>
+                  <p style={{ fontSize: "12px", margin: "0 0 4px" }}>광고 잔효(adstock) λ 선택 — OOS 오차가 가장 작은 값</p>
+                  <div className="chart-container" style={{ height: "200px", marginBottom: "12px" }}><canvas ref={cvRef}></canvas></div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
+                    <div>
+                      <p style={{ fontSize: "12px", margin: "0 0 4px" }}>탄력성 <span style={{ color: MUTED, fontSize: "11px" }}>(지출 1%↑당 성과 %↑)</span></p>
+                      <div className="table-wrap">
+                        <table className="data" style={{ fontSize: "11px" }}>
+                          <thead><tr><th>변수</th><th>coef</th><th>95% CI</th><th>p</th><th>유의</th></tr></thead>
+                          <tbody>
+                            {mmm.run.elasticities.map((e) => {
+                              const ciNonzero = e.ci_lo > 0 || e.ci_hi < 0;
+                              return (
+                                <tr key={e.var}>
+                                  <td>{e.var}</td>
+                                  <td className="tnum">{e.coef}</td>
+                                  <td className="tnum" style={{ fontSize: "11px" }}>[{e.ci_lo}, {e.ci_hi}]</td>
+                                  <td className="tnum">{e.p}</td>
+                                  <td>{ciNonzero ? <span className="chip ok" style={{ fontSize: "10px", padding: "1px 6px" }}><span className="dot"></span>CI≠0</span> : "—"}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                    <div className="chart-container" style={{ height: "240px", marginBottom: "12px" }}><canvas ref={fitRef}></canvas></div>
-                    <div className="chart-container" style={{ height: "280px" }}><canvas ref={decompRef}></canvas></div>
-                    <div className="table-wrap" style={{ marginTop: "12px" }}>
-                      <table className="data" style={{ fontSize: "11.5px" }}>
-                        <thead><tr><th>드라이버</th><th>{decomp.level ? "평균 기여" : "주별 변동(swing)"}</th><th>매체?</th></tr></thead>
-                        <tbody>
-                          {decomp.driverStats.map((d) => (
-                            <tr key={d.name}>
-                              <td>{d.name}</td>
-                              <td className="tnum">{decomp.level ? `${d.avg >= 0 ? "+" : ""}${fmtInt(d.avg)}명` : `±${fmtInt(d.swing)}명/주`}</td>
-                              <td>{d.media ? "✓" : MMM_NONMEDIA_GROUPS.includes(d.name) ? "baseline" : ""}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div>
+                      <p style={{ fontSize: "12px", margin: "0 0 4px" }}>VIF <span style={{ color: MUTED, fontSize: "11px" }}>(&gt;{mmm.cfg.vifThreshold}=채널끼리 겹침)</span></p>
+                      <div className="table-wrap">
+                        <table className="data" style={{ fontSize: "11px" }}>
+                          <thead><tr><th>변수</th><th>VIF</th></tr></thead>
+                          <tbody>
+                            {mmm.run.vif.filter((v) => !v.var.startsWith("sin") && !v.var.startsWith("cos")).map((v) => (
+                              <tr key={v.var}>
+                                <td>{v.var}</td>
+                                <td className="tnum" style={{ color: v.vif > mmm.cfg.vifThreshold ? POS : undefined }}>{v.vif}{v.vif > mmm.cfg.vifThreshold ? " ⚠" : ""}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                    {/* 튀는 구간 — 평소와 다르게 크게 벗어난 주(잔차 2σ↑) + 원인 메모(index renderMmmDecomp spikes 이식) */}
-                    {decomp.spikes && decomp.spikes.length > 0 && (
-                      <>
-                        <h3 className="section-title" style={{ fontSize: "13.5px", marginTop: "16px" }}>🔎 튀는 구간 (평소와 다르게 크게 벗어난 주 · 잔차 2σ↑)</h3>
-                        <div className="table-wrap">
-                          <table className="data" style={{ fontSize: "11.5px" }}>
-                            <thead><tr><th>주</th><th>baseline 대비</th><th>자동 진단</th><th>메모 (원인 기록)</th></tr></thead>
-                            <tbody>
-                              {decomp.spikes.map((s) => {
-                                const lbl = mmm.panel.weekLabel && s.i != null ? mmm.panel.weekLabel[s.i] : null;
-                                const noteKey = `${mmm.target}|${s.week}`;
-                                const clsLabel = s.cls === "channel"
-                                  ? { txt: "채널 스파크", color: "#7aa2f7" }
-                                  : s.cls === "baseline"
-                                    ? { txt: "baseline·계절 변동", color: "#22c55e" }
-                                    : { txt: "모델 밖(원인 입력 권장)", color: "#fbbf24" };
-                                const driverTxt = s.cls === "unexplained"
-                                  ? `잔차 ${s.residual >= 0 ? "+" : ""}${s.residual.toLocaleString()}명`
-                                  : `${s.domDriver} ${s.domVal >= 0 ? "+" : ""}${s.domVal.toLocaleString()}명`;
+                  </div>
+                  <p style={{ fontSize: "12px", margin: "10px 0 4px" }}>설명력 비중 (Shapley R²) · total R²={mmm.run.shapley?.total ?? "—"}</p>
+                  <div className="chart-container" style={{ height: "200px", marginBottom: "8px" }}><canvas ref={shapleyRef}></canvas></div>
+                  <p style={{ fontSize: "12px", margin: "10px 0 4px" }}>수확체감 — 채널별 한계 응답(+$1k당)</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: "10px", alignItems: "start" }}>
+                    <div className="chart-container" style={{ height: "240px" }}><canvas ref={satRef}></canvas></div>
+                    <div>
+                      <div className="table-wrap">
+                        <table className="data" style={{ fontSize: "11px" }}>
+                          <thead><tr><th>채널</th><th>현 지출<br />+$1k당</th><th>$10k당</th><th>$35k당</th><th>$60k당</th></tr></thead>
+                          <tbody>
+                            {(() => {
+                              const sbc = mmm.run.saturationByChannel || {};
+                              const keys = Object.keys(sbc);
+                              if (!keys.length) return <tr><td colSpan="5" style={{ color: MUTED }}>—</td></tr>;
+                              const cell = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v}명`);
+                              return keys.map((k) => {
+                                const s = sbc[k], m = s.marginal_kpi_per_1k || {}, neg = s.ln_coef < 0;
+                                const curMarg = s.recentMean > 0 ? +((s.ln_coef / (1 + s.recentMean)) * 1000).toFixed(1) : null;
                                 return (
-                                  <tr key={s.week}>
-                                    <td className="tnum">t{s.i != null ? s.i + 1 : s.week}{lbl != null && <span style={{ fontSize: "9px", color: MUTED }}><br />{String(lbl)}</span>}</td>
-                                    <td className="tnum" style={{ color: s.dev >= 0 ? POS : NEG }}>{s.dev >= 0 ? "+" : ""}{s.dev.toLocaleString()}명</td>
-                                    <td>
-                                      <span style={{ color: clsLabel.color, fontWeight: 600 }}>{clsLabel.txt}</span>
-                                      <span style={{ fontSize: "10px", color: MUTED }}><br />주 원인: {driverTxt}</span>
-                                    </td>
-                                    <td>
-                                      <input
-                                        value={spikeNotes[noteKey] || ""}
-                                        onChange={(e) => setSpikeNotes((n) => ({ ...n, [noteKey]: e.target.value }))}
-                                        placeholder="이 주에 무슨 일? (예: 앱스토어 피처드, 경쟁사 이슈)"
-                                        style={{ width: "100%", background: "var(--bg-2)", color: "var(--text-1)", border: "1px solid var(--border)", borderRadius: "4px", padding: "4px 7px", fontSize: "11px" }}
-                                      />
-                                    </td>
+                                  <tr key={k} style={neg ? { opacity: 0.55 } : undefined}>
+                                    <td><strong>{s.label}</strong>{neg ? <span style={{ fontSize: "9px", color: "#fbbf24" }}> 음수=노이즈</span> : ""}</td>
+                                    <td className="tnum" style={{ color: "#adc6ff" }}>{curMarg == null ? "—" : cell(curMarg)}{curMarg != null && <span style={{ fontSize: "9px", color: MUTED }}><br />@${(s.recentMean / 1000).toFixed(1)}k</span>}</td>
+                                    <td className="tnum">{cell(m["$10k"])}</td>
+                                    <td className="tnum">{cell(m["$35k"])}</td>
+                                    <td className="tnum">{cell(m["$60k"])}</td>
                                   </tr>
                                 );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <p className="muted" style={{ fontSize: "12px" }}>분해를 계산할 수 없습니다(ridge 특이·데이터 부족).</p>
-                )}
-              </section>
+                              });
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="muted" style={{ fontSize: "10.5px", marginTop: "4px" }}>
+                        <strong>&quot;+$1k당 N명&quot;</strong> = 그 지출 수준에서 1,000달러 더 쓸 때 늘어나는 결과(지출↑일수록 작아짐). <strong>음수 채널은 노이즈</strong>. 절대 인원은 holdout, 효율(CPR)은 비용 대비 따로.
+                      </p>
+                    </div>
+                  </div>
+                  {/* 채널별 탄력성·판정 요약 표 */}
+                  <p style={{ fontSize: "12px", margin: "14px 0 4px" }}>채널별 효과 요약</p>
+                  <div className="table-wrap">
+                    <table className="data" style={{ fontSize: "11.5px" }}>
+                      <thead><tr><th>채널</th><th title="지출 +10% 시 결과 탄력성">지출 +10%</th><th>+$1,000당</th><th>판정</th><th>신뢰도</th></tr></thead>
+                      <tbody>
+                        {mmm.effects.map((e) => {
+                          const vm = VERDICT_META[e.verdict] || VERDICT_META.uncertain;
+                          return (
+                            <tr key={e.key} style={e.sparse ? { opacity: 0.55 } : undefined}>
+                              <td><strong>{e.label}</strong></td>
+                              <td className="tnum" style={{ color: e.elas >= 0 ? NEG : POS }}>{e.elas >= 0 ? "+" : ""}{(e.elas * 10).toFixed(1)}%</td>
+                              <td className="tnum">{e.weeklyPer1k == null ? "—" : Math.round(e.weeklyPer1k).toLocaleString() + "명"}</td>
+                              <td style={{ color: vm.color, fontWeight: 600 }}>{vm.txt}</td>
+                              <td style={{ letterSpacing: "1px" }}>{pDots(e.p)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </details>
+
+              {/* ── 맨 밑: 상세 설명 문서 다운로드 ── */}
+              <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+                <button className="ab-button"
+                  onClick={() => textDownload(`MMM_기여분해_설명_${mmm.target}_${_today()}.md`, buildMmmGuideDoc(mmm, tgtKo))}>
+                  📄 이 과정에 대한 자세한 설명이 듣고 싶으신가요? — 상세 문서 받기
+                </button>
+              </div>
             </>
-          )}
+            );
+          })()}
 
           {/* ── STAGE ③ FORECAST ── */}
           {stage === "forecast" && (
