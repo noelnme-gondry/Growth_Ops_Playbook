@@ -140,10 +140,6 @@ export function buildPanelFromColMap(headers, rows, colMap, platform = "all") {
   const tagMode = !r.platform && mmmPlatformTags(headers, colMap).length > 0;
   const P = platform === "all" ? null : platform;
   const inPlat = (x) => !tagMode || !P || x.plat === P || x.plat === "common";
-  const pick = (list) => {
-    if (!tagMode || !P) return list[0] || null;
-    return list.find((x) => x.plat === P) || list.find((x) => x.plat === "common") || list[0] || null;
-  };
   let baseRows = rows || [];
   if (r.platform && P) baseRows = baseRows.filter((row) => String(row[r.platform]) === P);
   const num = (h, allowNaN) => baseRows.map((row) => {
@@ -162,9 +158,17 @@ export function buildPanelFromColMap(headers, rows, colMap, platform = "all") {
   for (const ch of chans) panel.ch[ch.key] = num(ch.header, true);
   for (const d of r.dummies) panel.dummy[d.key] = num(d.header, false);
   for (const s of r.steps) panel.steps[s.key] = num(s.header, false);
-  const regC = pick(r.reg), reactC = pick(r.react);
-  if (regC) panel.targets.Regs = num(regC.header, false);
-  if (reactC) panel.targets.React = num(reactC.header, false);
+  // 종속(타깃): 플랫폼 일치 컬럼을 index별 벡터 합산 — Total이면 Android+iOS 합(이전엔 pick=1개만
+  // 골라 Total인데 한 OS 값만 나오던 버그). X(채널)는 이미 filter라 대칭.
+  const sumCols = (list) => {
+    const cs = list.filter(inPlat);
+    if (!cs.length) return null;
+    const arrs = cs.map((c) => num(c.header, false));
+    return baseRows.map((_, i) => arrs.reduce((s, a) => s + (a[i] || 0), 0));
+  };
+  const regA = sumCols(r.reg), reactA = sumCols(r.react);
+  if (regA) panel.targets.Regs = regA;
+  if (reactA) panel.targets.React = reactA;
   const order = week.map((_, i) => i).sort((a, b) => week[a] - week[b]);
   const re = (arr) => order.map((i) => arr[i]);
   panel.week = re(panel.week);
