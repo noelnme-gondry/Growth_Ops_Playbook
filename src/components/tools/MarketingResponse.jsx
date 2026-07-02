@@ -1036,39 +1036,33 @@ export default function MarketingResponse() {
           decomp.weeks.map((w) =>
             decomp.groupNames.reduce((s, g) => (decompBucketOf(g) === bucket ? s + (w.contrib[g] || 0) : s), 0),
           );
-        // 기본 수요 = baseline(상수) + 계절(Seasonality) → 절대 밴드. 나머지는 그 위 누적.
-        const baseAbsolute = decomp.weeks.map((w, t) => w.baseline + bucketSeries("base")[t]);
-        const bands = [];
-        bands.push({ label: MMM_BUCKET_META.base.label, absolute: baseAbsolute, tone: MMM_BUCKET_META.base.tone });
-        bands.push({ label: MMM_BUCKET_META.trend.label, series: bucketSeries("trend"), tone: MMM_BUCKET_META.trend.tone });
-        bands.push({ label: MMM_BUCKET_META.event.label, series: bucketSeries("event"), tone: MMM_BUCKET_META.event.tone });
+        // area+누적선 방식은 밴드가 음수일 때 선이 역행해 다른 밴드를 침범(§유저 피드백: "쭉 꺼지는 게 카니발?").
+        // stacked bar로 전환 — Chart.js는 양/음수를 0선 기준 위/아래로 각자 독립 누적해 절대 안 꼬임.
+        // 기본 수요 = baseline(상수) + 계절(Seasonality) 흡수.
+        const bars = [];
+        bars.push({ label: MMM_BUCKET_META.base.label, data: decomp.weeks.map((w, t) => w.baseline + bucketSeries("base")[t]), tone: MMM_BUCKET_META.base.tone });
+        bars.push({ label: MMM_BUCKET_META.trend.label, data: bucketSeries("trend"), tone: MMM_BUCKET_META.trend.tone });
+        bars.push({ label: MMM_BUCKET_META.event.label, data: bucketSeries("event"), tone: MMM_BUCKET_META.event.tone });
         if (decompGrouped) {
-          bands.push({ label: MMM_BUCKET_META.media.label, series: bucketSeries("media"), tone: MMM_BUCKET_META.media.tone });
+          bars.push({ label: MMM_BUCKET_META.media.label, data: bucketSeries("media"), tone: MMM_BUCKET_META.media.tone });
         } else {
           const mediaGroups = decomp.groupNames.filter((g) => decompBucketOf(g) === "media");
           mediaGroups.forEach((g, i) => {
-            bands.push({ label: g, series: decomp.weeks.map((w) => w.contrib[g] || 0), tone: MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length] });
+            bars.push({ label: g, data: decomp.weeks.map((w) => w.contrib[g] || 0), tone: MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length] });
           });
         }
-        // 누적 → 각 밴드의 상단 경계선. fill:"-1"(이전 밴드 상단)로 밴드 색 채움. 맨 아래는 origin.
-        const datasets = [];
-        let cum = decomp.weeks.map(() => 0);
-        bands.forEach((b, i) => {
-          cum = b.absolute ? b.absolute.slice() : cum.map((v, t) => v + (b.series[t] || 0));
-          datasets.push({
-            label: b.label,
-            data: cum.slice(),
-            backgroundColor: b.tone + "40",
-            borderColor: b.tone,
-            borderWidth: 1,
-            fill: i === 0 ? "origin" : "-1",
-            pointRadius: 0,
-            tension: 0.25,
-            order: 3,
-          });
-        });
-        // 색 밴드 최상단 = 모델(fitted) 자체 → 별도 모델선은 중복이라 생략(§유저). 실제만 점선 오버레이.
+        const datasets = bars.map((b) => ({
+          type: "bar",
+          label: b.label,
+          data: b.data,
+          backgroundColor: b.tone,
+          stack: "decomp",
+          borderRadius: 2,
+          order: 2,
+        }));
+        // 실제(점선 오버레이) — 막대 스택 합과 얼마나 가까운지 눈으로 확인.
         datasets.push({
+          type: "line",
           label: "실제",
           data: decomp.weeks.map((w) => w.actual),
           borderColor: textCol,
@@ -1089,11 +1083,11 @@ export default function MarketingResponse() {
         decompOpts.plugins.tooltip = {
           ...decompOpts.plugins.tooltip,
           callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${Math.round(ctx.parsed.y).toLocaleString()}명`,
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? "+" : ""}${Math.round(ctx.parsed.y).toLocaleString()}명`,
           },
         };
-        decompOpts.scales.x.ticks = { ...decompOpts.scales.x.ticks, color: mutedCol, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 };
-        decompOpts.scales.y.ticks = { ...decompOpts.scales.y.ticks, color: mutedCol, callback: (v) => Math.round(v).toLocaleString() };
+        decompOpts.scales.x = { ...decompOpts.scales.x, stacked: true, ticks: { ...decompOpts.scales.x.ticks, color: mutedCol, autoSkip: true, maxTicksLimit: 12, maxRotation: 0 } };
+        decompOpts.scales.y = { ...decompOpts.scales.y, stacked: true, ticks: { ...decompOpts.scales.y.ticks, color: mutedCol, callback: (v) => Math.round(v).toLocaleString() } };
         // 메모 남긴 튀는 주 → 세로 점선 + 번호 뱃지(글씨 겹침 방지, 실제 메모는 아래 표에 동일 번호로).
         const notedSpikes = (decomp.spikes || []).filter((s) => (spikeNotes[`${mmm.target}|${s.week}`] || "").trim());
         const numOf = (s) => notedSpikes.findIndex((n) => n.week === s.week) + 1;
@@ -1131,7 +1125,6 @@ export default function MarketingResponse() {
         };
         inst.push(
           new Chart(decompRef.current.getContext("2d"), {
-            type: "line",
             data: { labels, datasets },
             options: decompOpts,
             plugins: [spikeLinePlugin],
@@ -2124,15 +2117,15 @@ export default function MarketingResponse() {
                       <p className="muted" style={{ fontSize: "11px", marginBottom: "6px" }}>실제(회색)와 모델(파랑)이 가까울수록 잘 맞은 거예요. 점선(시즌·추세 등)은 광고와 무관한 부분만 뽑아낸 흐름이라 시간에 따라 움직여요 — &quot;전체 기간 평균&quot;(고정값)과는 다른 선입니다.</p>
                       <div className="chart-container" style={{ height: "240px", marginBottom: "12px" }}><canvas ref={fitRef}></canvas></div>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
-                        <h3 className="section-title" style={{ fontSize: "13.5px", margin: 0 }}>매주 성과는 무엇으로 이뤄졌나 <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>· 기준선 위로 쌓은 값</span></h3>
+                        <h3 className="section-title" style={{ fontSize: "13.5px", margin: 0 }}>매주 성과는 무엇으로 이뤄졌나 <span style={{ fontSize: "11px", color: MUTED, fontWeight: 400 }}>· 막대는 0을 기준으로 위/아래로 쌓은 값</span></h3>
                         <div className="ab-pillgroup">
                           <button className={`ab-pill ${decompGrouped ? "active" : ""}`} onClick={() => setDecompGrouped(true)}>그룹으로 보기</button>
                           <button className={`ab-pill ${!decompGrouped ? "active" : ""}`} onClick={() => setDecompGrouped(false)}>광고 채널 펼치기</button>
                         </div>
                       </div>
                       <p className="muted" style={{ fontSize: "11px", marginBottom: "6px", lineHeight: 1.5 }}>
-                        아래에서부터 <b style={{ color: MMM_BUCKET_META.base.tone }}>기본 수요</b>(계절 포함) → <b style={{ color: MMM_BUCKET_META.trend.tone }}>장기 추세</b> → <b style={{ color: MMM_BUCKET_META.event.tone }}>이벤트·구조변화</b> → <b style={{ color: MMM_BUCKET_META.media.tone }}>광고 효과</b> 순으로 쌓았어요.
-                        색을 다 합친 <b>맨 윗면 = 모델 예측</b>이고, <b>실제</b>(점선)가 그 윗면에 가까울수록 잘 맞은 거예요.
+                        막대는 <b style={{ color: MMM_BUCKET_META.base.tone }}>기본 수요</b>(계절 포함) · <b style={{ color: MMM_BUCKET_META.trend.tone }}>장기 추세</b> · <b style={{ color: MMM_BUCKET_META.event.tone }}>이벤트·구조변화</b> · <b style={{ color: MMM_BUCKET_META.media.tone }}>광고 효과</b>를 한 막대에 쌓은 값이에요.
+                        어떤 항목이 그 주에 마이너스면 <b>막대가 0 아래로 내려가</b> 바로 보여요(예: 광고 효과가 노이즈로 마이너스). 막대 합과 <b>실제</b>(점선)가 가까울수록 모델이 잘 맞은 거예요.
                       </p>
                       {negAlert && (
                         <div style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "9px 12px", marginBottom: "8px", background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.4)", borderRadius: "8px" }}>
