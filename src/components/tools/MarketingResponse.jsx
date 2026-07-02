@@ -971,28 +971,51 @@ export default function MarketingResponse() {
           }),
         );
       }
-      // Saturation curves (per channel, y = ln_coef/(1+x)*1000)
+      // 반응 곡선 (per channel, y = ln_coef·ln(1+x) = 그 지출에서의 예상 기여).
+      // 기존 한계응답(ln_coef/(1+x)) 곡선은 x→0에서 발산(1,000,000)해 판독 불가(§유저) →
+      // 누적 반응 곡선으로 교체(단조·발산 없음, 평평해질수록 수확체감). 현재 지출 위치 점으로 표시.
       if (satRef.current && run.saturationByChannel) {
+        const themeVarS = (n) => (typeof document !== "undefined" ? getComputedStyle(document.body).getPropertyValue(n).trim() : "") || "";
+        const mutedColS = themeVarS("--text-muted") || CHART_THEME.muted;
+        const textColS = themeVarS("--text-1") || CHART_THEME.text;
         const chs = Object.entries(run.saturationByChannel);
         if (chs.length) {
-          const maxSpend = Math.max(...chs.map(([, s]) => s.recentMean || 0), 60000);
-          const grid = Array.from({ length: 25 }, (_, i) => (i / 24) * maxSpend);
-          const palette = ["#7aa2f7", "#f7768e", "#9ece6a", "#e0af68", "#bb9af7", "#7dcfff"];
+          const maxSpend = Math.max(...chs.map(([, s]) => s.recentMean || 0)) * 1.6 || 40000;
+          const grid = Array.from({ length: 41 }, (_, i) => (i / 40) * maxSpend);
+          const respAt = (s, x) => s.ln_coef * Math.log(1 + x);
+          const lineDs = chs.map(([, s], i) => ({
+            type: "line",
+            label: s.label,
+            data: grid.map((x) => ({ x, y: respAt(s, x) })),
+            borderColor: MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length],
+            borderDash: s.ln_coef < 0 ? [5, 4] : [],
+            borderWidth: 1.75,
+            pointRadius: 0,
+            tension: 0.3,
+          }));
+          // 현재 지출 위치(각 채널 recentMean) — 곡선 위 어디에 있는지 한눈에.
+          const curPts = chs
+            .map(([, s], i) => ({ x: s.recentMean, y: respAt(s, s.recentMean), _c: MMM_MEDIA_PALETTE[i % MMM_MEDIA_PALETTE.length] }))
+            .filter((p) => p.x > 0);
+          const curDs = {
+            type: "scatter",
+            label: "현재 지출 위치",
+            data: curPts,
+            pointStyle: "circle",
+            pointRadius: 4,
+            pointBorderColor: textColS,
+            pointBorderWidth: 1.5,
+            pointBackgroundColor: (ctx) => ctx.raw?._c || textColS,
+          };
+          const satOpts = chartBase();
+          satOpts.plugins.legend = { position: "bottom", labels: { color: textColS, font: { size: 10 }, boxWidth: 10, boxHeight: 10, padding: 8, usePointStyle: true } };
+          satOpts.plugins.tooltip = { ...satOpts.plugins.tooltip, callbacks: { label: (c) => `${c.dataset.label}: ${Math.round(c.parsed.y).toLocaleString()}명 @ $${Math.round(c.parsed.x / 1000)}k` } };
+          satOpts.scales.x = { type: "linear", ticks: { color: mutedColS, font: { size: 10 }, callback: (v) => "$" + Math.round(v / 1000) + "k" }, grid: { display: false } };
+          satOpts.scales.y = { ticks: { color: mutedColS, font: { size: 10 }, callback: (v) => Math.round(v).toLocaleString() }, grid: { color: CHART_THEME.grid } };
           inst.push(
             new Chart(satRef.current.getContext("2d"), {
-              type: "line",
-              data: {
-                labels: grid.map((x) => "$" + Math.round(x / 1000) + "k"),
-                datasets: chs.map(([, s], i) => ({
-                  label: s.label,
-                  data: grid.map((x) => (s.ln_coef / (1 + x)) * 1000),
-                  borderColor: palette[i % palette.length],
-                  borderDash: s.ln_coef < 0 ? [5, 4] : [],
-                  pointRadius: 0,
-                  tension: 0.3,
-                })),
-              },
-              options: chartBase(),
+              data: { datasets: [...lineDs, curDs] },
+              options: satOpts,
             }),
           );
         }
@@ -1075,10 +1098,8 @@ export default function MarketingResponse() {
         });
         const decompOpts = chartBase();
         decompOpts.plugins.legend = {
-          position: "right",
-          align: "start",
-          maxWidth: 170,
-          labels: { color: textCol, font: { size: 11 }, boxWidth: 12, boxHeight: 12, padding: 8, usePointStyle: true },
+          position: "bottom",
+          labels: { color: textCol, font: { size: 11 }, boxWidth: 12, boxHeight: 12, padding: 10, usePointStyle: true },
         };
         decompOpts.plugins.tooltip = {
           ...decompOpts.plugins.tooltip,
@@ -2262,9 +2283,10 @@ export default function MarketingResponse() {
                   </div>
                   <p style={{ fontSize: "12px", margin: "10px 0 4px" }}>설명력 비중 (Shapley R²) · total R²={mmm.run.shapley?.total ?? "—"}</p>
                   <div className="chart-container" style={{ height: "200px", marginBottom: "8px" }}><canvas ref={shapleyRef}></canvas></div>
-                  <p style={{ fontSize: "12px", margin: "10px 0 4px" }}>수확체감 — 채널별 한계 응답(+$1k당)</p>
+                  <p style={{ fontSize: "12px", margin: "10px 0 2px" }}>수확체감 반응 곡선 — 지출을 늘릴수록 기여가 어떻게 늘고 꺾이나</p>
+                  <p className="muted" style={{ fontSize: "10.5px", margin: "0 0 4px" }}>곡선이 <b>평평해질수록 수확체감</b>(1달러당 효과 감소). ● = 현재 지출 위치 — 곡선이 이미 꺾인 뒤면 증액 효율 낮음. 점선 = 음수(노이즈).</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: "10px", alignItems: "start" }}>
-                    <div className="chart-container" style={{ height: "240px" }}><canvas ref={satRef}></canvas></div>
+                    <div className="chart-container" style={{ height: "280px", minHeight: "280px" }}><canvas ref={satRef}></canvas></div>
                     <div>
                       <div className="table-wrap">
                         <table className="data" style={{ fontSize: "11px" }}>
